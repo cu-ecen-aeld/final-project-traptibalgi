@@ -32,12 +32,21 @@
 #include <linux/videodev2.h>
 #include <time.h>
 
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 #define COLOR_CONVERT
 #define HRES 320
 #define VRES 240
 #define HRES_STR "320"
 #define VRES_STR "240"
+#define PORT 8080
+#define SERVER_IP "10.0.0.127"
+#define SERVER_PORT 9000
+
+static int sockfd;
 
 // Format is used by a number of functions, so made as a file global
 static struct v4l2_format fmt;
@@ -65,6 +74,46 @@ static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
 static int              frame_count = 30;
+
+void setup_socket_connection() 
+{
+    struct sockaddr_in server_addr;
+
+    sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd < 0) 
+    {
+        perror("Socket creation failed");
+        exit(EXIT_FAILURE);
+    }
+
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_port = htons(SERVER_PORT);
+    inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr);
+
+    if (connect(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) 
+    {
+        perror("Connection to server failed");
+        exit(EXIT_FAILURE);
+    }
+}
+
+static void process_image(const void *p, int size) 
+{
+    // Send the frame over the socket
+    if (send(sockfd, p, size, 0) < 0) 
+    {
+        perror("Send failed");
+        close(sockfd);
+        exit(EXIT_FAILURE);
+    }
+
+    printf("Frame sent: %d bytes\n", size);
+}
+
+void cleanup_socket_connection() 
+{
+    close(sockfd);
+}
 
 static void errno_exit(const char *s)
 {
@@ -213,79 +262,6 @@ void yuv2rgb(int y, int u, int v, unsigned char *r, unsigned char *g, unsigned c
 
 unsigned int framecnt=0;
 unsigned char bigbuffer[(1280*960)];
-
-static void process_image(const void *p, int size)
-{
-    int i, newi, newsize=0;
-    struct timespec frame_time;
-    int y_temp, y2_temp, u_temp, v_temp;
-    unsigned char *pptr = (unsigned char *)p;
-
-    // record when process was called
-    clock_gettime(CLOCK_REALTIME, &frame_time);    
-
-    framecnt++;
-    printf("frame %d: ", framecnt);
-
-    // This just dumps the frame to a file now, but you could replace with whatever image
-    // processing you wish.
-    //
-
-    if(fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_GREY)
-    {
-        printf("Dump graymap as-is size %d\n", size);
-        dump_pgm(p, size, framecnt, &frame_time);
-    }
-
-    else if(fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV)
-    {
-
-#if defined(COLOR_CONVERT)
-        printf("Dump YUYV converted to RGB size %d\n", size);
-       
-        // Pixels are YU and YV alternating, so YUYV which is 4 bytes
-        // We want RGB, so RGBRGB which is 6 bytes
-        //
-        for(i=0, newi=0; i<size; i=i+4, newi=newi+6)
-        {
-            y_temp=(int)pptr[i]; u_temp=(int)pptr[i+1]; y2_temp=(int)pptr[i+2]; v_temp=(int)pptr[i+3];
-            yuv2rgb(y_temp, u_temp, v_temp, &bigbuffer[newi], &bigbuffer[newi+1], &bigbuffer[newi+2]);
-            yuv2rgb(y2_temp, u_temp, v_temp, &bigbuffer[newi+3], &bigbuffer[newi+4], &bigbuffer[newi+5]);
-        }
-
-        dump_ppm(bigbuffer, ((size*6)/4), framecnt, &frame_time);
-#else
-        printf("Dump YUYV converted to YY size %d\n", size);
-       
-        // Pixels are YU and YV alternating, so YUYV which is 4 bytes
-        // We want Y, so YY which is 2 bytes
-        //
-        for(i=0, newi=0; i<size; i=i+4, newi=newi+2)
-        {
-            // Y1=first byte and Y2=third byte
-            bigbuffer[newi]=pptr[i];
-            bigbuffer[newi+1]=pptr[i+2];
-        }
-
-        dump_pgm(bigbuffer, (size/2), framecnt, &frame_time);
-#endif
-
-    }
-
-    else if(fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_RGB24)
-    {
-        printf("Dump RGB as-is size %d\n", size);
-        dump_ppm(p, size, framecnt, &frame_time);
-    }
-    else
-    {
-        printf("ERROR - unknown dump format\n");
-    }
-
-    fflush(stderr);
-    //fprintf(stderr, ".");
-    fflush(stdout);
-}
 
 static int read_frame(void)
 {
@@ -947,6 +923,7 @@ int main(int argc, char **argv)
     stop_capturing();
     uninit_device();
     close_device();
+    cleanup_socket_connection();
     fprintf(stderr, "\n");
     return 0;
 }

@@ -2,3 +2,5 @@
 build/
 .vscode/
 *.log
+simple-capture
+client

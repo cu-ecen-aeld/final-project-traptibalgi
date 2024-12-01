@@ -916,6 +916,8 @@ int main(int argc, char **argv)
         }
     }
 
+    setup_socket_connection();
+
     open_device();
     init_device();
     start_capturing();

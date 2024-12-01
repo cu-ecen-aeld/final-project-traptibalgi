@@ -252,63 +252,63 @@ unsigned char bigbuffer[(1280*960)];
 
 static void process_image(const void *p, int size) 
 {
-    int i, newi, newsize=0;
-    int y_temp, y2_temp, u_temp, v_temp;
-    unsigned char *pptr = (unsigned char *)p;
-    char ppm_dumpname[32];
-    struct timespec frame_time;
+//     int i, newi, newsize=0;
+//     int y_temp, y2_temp, u_temp, v_temp;
+//     unsigned char *pptr = (unsigned char *)p;
+//     char ppm_dumpname[32];
+//     struct timespec frame_time;
 
-    clock_gettime(CLOCK_REALTIME, &frame_time);
+//     clock_gettime(CLOCK_REALTIME, &frame_time);
 
-    framecnt++;
-    printf("frame %d: \n", framecnt);
+//     framecnt++;
+//     printf("frame %d: \n", framecnt);
 
-    // Check pixel format and process accordingly
-    if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_GREY) 
-    {
-        printf("Dump graymap as-is size %d\n", size);
-        dump_pgm(p, size, framecnt, &frame_time);
-    } 
-    else if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV) 
-    {
-#if defined(COLOR_CONVERT)
-        printf("Dump YUYV converted to RGB size %d\n", size);
+//     // Check pixel format and process accordingly
+//     if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_GREY) 
+//     {
+//         printf("Dump graymap as-is size %d\n", size);
+//         dump_pgm(p, size, framecnt, &frame_time);
+//     } 
+//     else if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_YUYV) 
+//     {
+// #if defined(COLOR_CONVERT)
+//         printf("Dump YUYV converted to RGB size %d\n", size);
 
-        // Convert YUYV to RGB format
-        for (i = 0, newi = 0; i < size; i = i + 4, newi = newi + 6) 
-        {
-            y_temp = (int)pptr[i]; u_temp = (int)pptr[i + 1];
-            y2_temp = (int)pptr[i + 2]; v_temp = (int)pptr[i + 3];
-            yuv2rgb(y_temp, u_temp, v_temp, &bigbuffer[newi], &bigbuffer[newi + 1], &bigbuffer[newi + 2]);
-            yuv2rgb(y2_temp, u_temp, v_temp, &bigbuffer[newi + 3], &bigbuffer[newi + 4], &bigbuffer[newi + 5]);
-        }
+//         // Convert YUYV to RGB format
+//         for (i = 0, newi = 0; i < size; i = i + 4, newi = newi + 6) 
+//         {
+//             y_temp = (int)pptr[i]; u_temp = (int)pptr[i + 1];
+//             y2_temp = (int)pptr[i + 2]; v_temp = (int)pptr[i + 3];
+//             yuv2rgb(y_temp, u_temp, v_temp, &bigbuffer[newi], &bigbuffer[newi + 1], &bigbuffer[newi + 2]);
+//             yuv2rgb(y2_temp, u_temp, v_temp, &bigbuffer[newi + 3], &bigbuffer[newi + 4], &bigbuffer[newi + 5]);
+//         }
 
-        dump_ppm(bigbuffer, ((size * 6) / 4), framecnt, &frame_time);
-#else
-        printf("Dump YUYV converted to YY size %d\n", size);
+//         dump_ppm(bigbuffer, ((size * 6) / 4), framecnt, &frame_time);
+// #else
+//         printf("Dump YUYV converted to YY size %d\n", size);
 
-        // Extract Y components only
-        for (i = 0, newi = 0; i < size; i = i + 4, newi = newi + 2) 
-        {
-            bigbuffer[newi] = pptr[i];
-            bigbuffer[newi + 1] = pptr[i + 2];
-        }
+//         // Extract Y components only
+//         for (i = 0, newi = 0; i < size; i = i + 4, newi = newi + 2) 
+//         {
+//             bigbuffer[newi] = pptr[i];
+//             bigbuffer[newi + 1] = pptr[i + 2];
+//         }
 
-        dump_pgm(bigbuffer, (size / 2), framecnt, &frame_time);
-#endif
-    } 
-    else if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_RGB24) 
-    {
-        printf("Dump RGB as-is size %d\n", size);
-        dump_ppm(p, size, framecnt, &frame_time);
-    } 
-    else 
-    {
-        printf("ERROR - unknown dump format\n");
-    }
+//         dump_pgm(bigbuffer, (size / 2), framecnt, &frame_time);
+// #endif
+//     } 
+//     else if (fmt.fmt.pix.pixelformat == V4L2_PIX_FMT_RGB24) 
+//     {
+//         printf("Dump RGB as-is size %d\n", size);
+//         dump_ppm(p, size, framecnt, &frame_time);
+//     } 
+//     else 
+//     {
+//         printf("ERROR - unknown dump format\n");
+//     }
 
-    fflush(stderr);
-    fflush(stdout);
+//     fflush(stderr);
+//     fflush(stdout);
 
     // Send the frame over the socket after saving it
     if (send(sockfd, p, size, 0) < 0) 
@@ -437,7 +437,7 @@ static void mainloop(void)
 
     count = frame_count;
 
-    while (count > 0)
+    while (1)
     {
         for (;;)
         {

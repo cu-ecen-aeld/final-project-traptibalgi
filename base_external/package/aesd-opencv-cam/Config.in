@@ -1,4 +1,4 @@
-config BR2_PACKAGE_AESD_APP
-	bool "aesd-app"
+config BR2_PACKAGE_AESD_OPENCV_CAM
+	bool "aesd-opencv-cam"
 	help
 		Adds the tester and application code for the server

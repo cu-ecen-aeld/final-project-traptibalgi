@@ -1,4 +1,4 @@
-#include "/usr/include/opencv4/opencv2/opencv.hpp"
+#include "opencv2/opencv.hpp"
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
@@ -9,7 +9,7 @@
 #include <errno.h>
 
 #define PORT_NUM 9000
-#define BUF_SIZE 921600
+#define BUF_SIZE 230400
 
 using namespace cv;
 
@@ -19,6 +19,7 @@ int main()
     struct sockaddr_in server_addr, client_addr;
     char buffer[BUF_SIZE];
     socklen_t addr_len = sizeof(client_addr);
+    std::vector<Mat> frames;
 
     // Create socket
     sockfd = socket(AF_INET, SOCK_STREAM, 0);
@@ -71,26 +72,31 @@ int main()
             perror("Receive failed or connection closed");
             break;
         }
-        if(bytes_received == BUF_SIZE){
-        // Process and display the frame
-        Mat frame(480, 640, CV_8UC3, buffer);
-        if (frame.empty()) 
+        if(bytes_received == BUF_SIZE)
         {
-            fprintf(stderr, "Error: Received empty frame\n");
-            continue;
-        }
+                
+                Mat frame(320, 240, CV_8UC3, buffer);
+                
+                if (frame.empty()) 
+                {
+                    fprintf(stderr, "Error: Received empty frame\n");
+                    continue;
+                }
+                
+                frames.push_back(frame);
 
-        imshow("Server Frame", frame);
-    }
-    else
-    {
-        fprintf(stderr, "Bytes received %d. But buffer size %d\n", bytes_received, BUF_SIZE);
-    }
-        if (waitKey(1) == 27) 
-        {
-            printf("Exiting display\n");
-            break;
         }
+        else
+        {
+            fprintf(stderr, "Bytes received %d. But buffer size %d\n", bytes_received, BUF_SIZE);
+        }
+    }
+    
+    for (size_t i = 0; i < frames.size();++i)
+    {
+        char filename[64];
+        snprintf(filename,sizeof(filename),"frame_%03zu.ppm",i);
+        imwrite(filename, frames[i]);
     }
 
     close(client_fd);

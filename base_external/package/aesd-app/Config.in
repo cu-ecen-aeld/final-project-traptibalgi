@@ -1,0 +1,4 @@
+config BR2_PACKAGE_AESD_APP
+	bool "aesd-app"
+	help
+		Adds the tester and application code for the server

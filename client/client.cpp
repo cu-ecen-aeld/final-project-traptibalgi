@@ -9,7 +9,7 @@
 #include <errno.h>
 
 #define PORT_NUM 9000
-#define BUF_SIZE 153600
+#define BUF_SIZE 921600
 
 using namespace cv;
 
@@ -65,12 +65,13 @@ int main()
     while (1) {
         // Receive frame data
         ssize_t bytes_received = recv(client_fd, buffer, BUF_SIZE, MSG_WAITALL);
+        fprintf(stderr, "Bytes received %d\n", bytes_received);
         if (bytes_received <= 0) 
         {
             perror("Receive failed or connection closed");
             break;
         }
-
+        if(bytes_received == BUF_SIZE){
         // Process and display the frame
         Mat frame(480, 640, CV_8UC3, buffer);
         if (frame.empty()) 
@@ -80,6 +81,11 @@ int main()
         }
 
         imshow("Server Frame", frame);
+    }
+    else
+    {
+        fprintf(stderr, "Bytes received %d. But buffer size %d\n", bytes_received, BUF_SIZE);
+    }
         if (waitKey(1) == 27) 
         {
             printf("Exiting display\n");

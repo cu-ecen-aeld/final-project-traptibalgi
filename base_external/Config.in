@@ -1,1 +1,2 @@
 source "$BR2_EXTERNAL_project_base_PATH/package/aesd-opencv-cam/Config.in"
+source "$BR2_EXTERNAL_project_base_PATH/package/aesd-server/Config.in"

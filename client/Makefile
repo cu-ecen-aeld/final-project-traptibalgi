@@ -1,19 +1,20 @@
 # Starter code from https://github.com/siewertsmooc/RTES-ECEE-5623/blob/main/simple-capture/Makefile
 # Modified by Trapti Balgi
 
-INCLUDE_DIRS = 
+INCLUDE_DIRS = -I/usr/include/opencv4
 LIB_DIRS = 
-CC= $(CROSS_COMPILE)gcc
+CXX = $(CROSS_COMPILE)g++
 
 CDEFS=
 CFLAGS= -O0 -g $(INCLUDE_DIRS) $(CDEFS)
-LIBS= -lrt
+LIBS= `pkg-config --cflags --libs opencv4`
+CPPLIBS= -L/usr/lib -lopencv_core -lopencv_flann -lopencv_video -lpthread -L/usr/include
 
 HFILES= 
-CFILES= client.c
+CPPFILES= client.cpp
 
-SRCS= ${HFILES} ${CFILES}
-OBJS= ${CFILES:.c=.o}
+SRCS= ${HFILES} ${CPPFILES}
+OBJS= ${CPPFILES:.cpp=.o}
 
 all:	client
 
@@ -24,10 +25,13 @@ clean:
 distclean:
 	-rm -f *.o *.d
 
-capture: ${OBJS}
-	$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $@.o $(LIBS)
-
+client: ${OBJS}
+	#$(CXX) $(LDFLAGS) $(CFLAGS) -o $@ $@.o $(LIBS)
+	g++ -O0 -g -I/usr/include/opencv4 -o client client.cpp `pkg-config --cflags --libs opencv4`
 depend:
 
-.c.o:
-	$(CC) $(CFLAGS) -c $<
+.cpp.o:
+	$(CXX) $(CFLAGS) -c $<
+
+
+

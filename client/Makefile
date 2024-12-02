@@ -27,7 +27,7 @@ distclean:
 
 client: ${OBJS}
 	#$(CXX) $(LDFLAGS) $(CFLAGS) -o $@ $@.o $(LIBS)
-	g++ -O0 -g -I/usr/include/opencv4 -o client client.cpp `pkg-config --cflags --libs opencv4`
+	g++ -O0 -g -I/usr/include/opencv4 -o client client.cpp -pthread `pkg-config --cflags --libs opencv4`
 depend:
 
 .cpp.o:

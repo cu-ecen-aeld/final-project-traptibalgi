@@ -97,6 +97,40 @@ void setup_socket_connection()
     }
 }
 
+int send_all(int sockfd, const void *buffer, size_t length)
+{
+    size_t total_sent = 0; 
+    const char *buf = (const char *)buffer;
+
+    while (total_sent < length)
+    {
+        ssize_t bytes_sent = send(sockfd, buf + total_sent, length - total_sent, 0);
+        if (bytes_sent < 0)
+        {
+            if (errno == EINTR) 
+            {
+                fprintf(stderr, "Retrying send... %zu/%zu bytes sent\n", total_sent, length);
+                continue;
+            }
+            else if (errno == EAGAIN || errno == EWOULDBLOCK) 
+            {
+                struct timespec retry_delay = { .tv_sec = 0, .tv_nsec = 10000000 }; // 10 ms
+                nanosleep(&retry_delay, NULL);
+                continue;
+            }
+            else
+            {
+                perror("Send failed");
+                return -1;
+            }
+        }
+
+        total_sent += bytes_sent;
+    }
+
+    return 0;
+}
+
 static void process_image(const void *p, int size) 
 {
     unsigned char rgb_buffer[HRES * VRES * 3];
@@ -115,9 +149,9 @@ static void process_image(const void *p, int size)
         yuv2rgb(y1, u, v, &rgb[j+3], &rgb[j+4], &rgb[j+5]);
     }
 
-    if (send(sockfd, rgb_buffer, HRES * VRES * 3, 0) < 0)
+    if (send_all(sockfd, rgb_buffer, HRES * VRES * 3) < 0)
     {
-        perror("Send failed");
+        fprintf(stderr, "Send failed. Closing connection.\n");
         close(sockfd);
         exit(EXIT_FAILURE);
     }
@@ -383,14 +417,15 @@ static int read_frame(void)
     return 1;
 }
 
-static void mainloop(void)
+static void 
+mainloop(void)
 {
     unsigned int count;
     struct timespec read_delay;
     struct timespec time_error;
 
     read_delay.tv_sec=0;
-    read_delay.tv_nsec=30000;
+    read_delay.tv_nsec=60000;
 
     count = frame_count;
 

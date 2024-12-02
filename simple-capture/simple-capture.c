@@ -54,6 +54,7 @@
 static int sockfd;
 struct addrinfo *res;  // will point to the results
 volatile unsigned caught_signal = 0;
+int new_fd;
 
 // Format is used by a number of functions, so made as a file global
 static struct v4l2_format fmt;
@@ -157,10 +158,10 @@ static void process_image(const void *p, int size)
 
     syslog(LOG_DEBUG, "going to send");
 
-    if (send(sockfd, rgb_buffer, HRES * VRES * 3, 0) < 0)
+    if (send(new_fd, rgb_buffer, HRES * VRES * 3, 0) < 0)
     {
         syslog(LOG_ERR, "Send failed: %s", strerror(errno));
-        close(sockfd);
+        close(new_fd);
         exit(EXIT_FAILURE);
     }
 
@@ -926,7 +927,6 @@ int main(int argc, char **argv)
     struct sockaddr_storage their_addr;
     struct sockaddr_in server_addr;
     int opt = 1;
-    int new_fd;
     char client_ip[INET_ADDRSTRLEN];     
     addr_size = sizeof their_addr;
 
@@ -1059,25 +1059,22 @@ int main(int argc, char **argv)
         syslog(LOG_ERR, "Sigaction for SIGINT failed");
     }
 
+    new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &addr_size);
+    if (new_fd == -1)
+    {
+        syslog(LOG_ERR, "Accept failed: %s", strerror(errno));
+        goto exit_on_fail;
+    }
+
+    inet_ntop(their_addr.ss_family, &(((struct sockaddr_in*)&their_addr)->sin_addr), client_ip, sizeof(client_ip));
+    syslog(LOG_DEBUG, "Accepted connection from %s", client_ip);
+
+    /* Now accept incoming connections in a loop while signal not caught*/
     while (!caught_signal)
     {
-        new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &addr_size);
-        if (new_fd == -1)
-        {
-            syslog(LOG_ERR, "Accept failed: %s", strerror(errno));
-            goto exit_on_fail;
-        }
-
-        inet_ntop(their_addr.ss_family, &(((struct sockaddr_in*)&their_addr)->sin_addr), client_ip, sizeof(client_ip));
-        syslog(LOG_DEBUG, "Accepted connection from %s", client_ip);
-
-        /* Now accept incoming connections in a loop while signal not caught*/
-        while (!caught_signal)
-        {
-            mainloop();
-        }
-
+        mainloop();
     }
+
 
 exit_on_fail:
     stop_capturing();

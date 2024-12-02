@@ -63,7 +63,8 @@ int main()
 
     printf("Connection established with %s\n", inet_ntoa(client_addr.sin_addr));
 
-    while (1) {
+    while (1) 
+    {
         // Receive frame data
         ssize_t bytes_received = recv(client_fd, buffer, BUF_SIZE, MSG_WAITALL);
         fprintf(stderr, "Bytes received %d\n", bytes_received);
@@ -83,20 +84,23 @@ int main()
                     continue;
                 }
                 
-                frames.push_back(frame);
-
+                imshow("Client Display", frame);
+                
+                char filename[64];
+                snprintf(filename, sizeof(filename), "frame_%03zu.jpg");
+                imwrite(filename, frame);
+                
+                if(waitKey(1) == 27)
+                {
+                    break;
+                }
+                
         }
         else
         {
             fprintf(stderr, "Bytes received %d. But buffer size %d\n", bytes_received, BUF_SIZE);
         }
         
-        for (size_t i = 0; i <frames.size(); ++i)
-        {
-            char filename[64];
-            snprintf(filename, sizeof(filename), "frame_%03zu.jpg",i);
-            imwrite(filename, frames[i]);
-        }
         
     }
     

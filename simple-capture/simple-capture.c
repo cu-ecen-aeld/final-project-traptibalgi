@@ -394,7 +394,7 @@ static void mainloop(void)
 
     count = frame_count;
 
-    while (count > 0)
+    while (1)
     {
         for (;;)
         {

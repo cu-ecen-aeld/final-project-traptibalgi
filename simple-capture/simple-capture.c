@@ -99,8 +99,23 @@ void setup_socket_connection()
 
 static void process_image(const void *p, int size) 
 {
-    // Send the frame over the socket
-    if (send(sockfd, p, size, 0) < 0)  
+    unsigned char rgb_buffer[HRES * VRES * 3];
+    int i, j;
+    unsigned char *yuyv = (unsigned char *)p;
+    unsigned char *rgb = rgb_buffer;
+
+    for (i = 0, j = 0; i < HRES * VRES * 2; i += 4, j += 6)
+    {
+        int y0 = yuyv[i];
+        int u = yuyv[i+1];
+        int y1 = yuyv[i+2];
+        int v = yuyv[i+3];
+
+        yuv2rgb(y0, u, v, &rgb[j], &rgb[j+1], &rgb[j+2]);
+        yuv2rgb(y1, u, v, &rgb[j+3], &rgb[j+4], &rgb[j+5]);
+    }
+
+    if (send(sockfd, rgb_buffer, HRES * VRES * 3, 0) < 0)
     {
         perror("Send failed");
         close(sockfd);

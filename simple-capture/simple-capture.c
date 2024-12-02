@@ -103,7 +103,7 @@ static void signal_handler (int signal_number)
 
 int send_all(int sockfd, const void *buffer, size_t length)
 {
-    syslog(LOG_DEBUG, "in process_image");
+    syslog(LOG_DEBUG, "in send_all");
     size_t total_sent = 0; 
     const char *buf = (const char *)buffer;
 
@@ -138,7 +138,7 @@ int send_all(int sockfd, const void *buffer, size_t length)
 
 static void process_image(const void *p, int size) 
 {
-    syslog(LOG_DEBUG, "in process_image");
+    syslog(LOG_DEBUG, "in process_image, size is %d", size);
     unsigned char rgb_buffer[HRES * VRES * 3];
     int i, j;
     unsigned char *yuyv = (unsigned char *)p;
@@ -155,12 +155,23 @@ static void process_image(const void *p, int size)
         yuv2rgb(y1, u, v, &rgb[j+3], &rgb[j+4], &rgb[j+5]);
     }
 
-    if (send_all(sockfd, rgb_buffer, HRES * VRES * 3) < 0)
+    syslog(LOG_DEBUG, "going to send");
+
+    if (send(sockfd, rgb_buffer, HRES * VRES * 3, 0) < 0)
     {
-        fprintf(stderr, "Send failed. Closing connection.\n");
+        syslog(LOG_ERR, "Send failed: %s", strerror(errno));
         close(sockfd);
         exit(EXIT_FAILURE);
     }
+
+    syslog(LOG_DEBUG, "Frame sent: %d bytes\n", size);
+
+    // if (send_all(sockfd, rgb_buffer, HRES * VRES * 3) < 0)
+    // {
+    //     fprintf(stderr, "Send failed. Closing connection.\n");
+    //     close(sockfd);
+    //     exit(EXIT_FAILURE);
+    // }
 
     printf("Frame sent: %d bytes\n", size);
 }
@@ -1002,6 +1013,9 @@ int main(int argc, char **argv)
         syslog(LOG_ERR, "Failed to make a socket");
         goto exit_on_fail;
     }
+
+    int flags = fcntl(sockfd, F_GETFL, 0);
+    fcntl(sockfd, F_SETFL, flags & ~O_NONBLOCK);
 
     /* Allow reuse of socket */
     struct timeval timeout;

@@ -103,6 +103,7 @@ static void signal_handler (int signal_number)
 
 int send_all(int sockfd, const void *buffer, size_t length)
 {
+    syslog(LOG_DEBUG, "in process_image");
     size_t total_sent = 0; 
     const char *buf = (const char *)buffer;
 
@@ -137,6 +138,7 @@ int send_all(int sockfd, const void *buffer, size_t length)
 
 static void process_image(const void *p, int size) 
 {
+    syslog(LOG_DEBUG, "in process_image");
     unsigned char rgb_buffer[HRES * VRES * 3];
     int i, j;
     unsigned char *yuyv = (unsigned char *)p;
@@ -313,6 +315,7 @@ unsigned char bigbuffer[(1280*960)];
 
 static int read_frame(void)
 {
+    syslog(LOG_DEBUG, "in read_frame");
     struct v4l2_buffer buf;
     unsigned int i;
 
@@ -419,6 +422,7 @@ static int read_frame(void)
 static void 
 mainloop(void)
 {
+    syslog(LOG_DEBUG, "in mainloop");
     unsigned int count;
     struct timespec read_delay;
     struct timespec time_error;

@@ -100,7 +100,7 @@ void setup_socket_connection()
 static void process_image(const void *p, int size) 
 {
     // Send the frame over the socket
-    if (send(sockfd, p, size, 0) < 0) 
+    if (send(sockfd, p, size, 0) < 0)  
     {
         perror("Send failed");
         close(sockfd);
@@ -379,7 +379,7 @@ static void mainloop(void)
 
     count = frame_count;
 
-    while (1)
+    while (count > 0)
     {
         for (;;)
         {

@@ -36,17 +36,25 @@
 #include <arpa/inet.h>
 #include <unistd.h>
 
+#include <errno.h>
+#include <signal.h>
+#include <syslog.h>
+#include <netdb.h>
+
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 #define COLOR_CONVERT
 #define HRES 320
 #define VRES 240
 #define HRES_STR "320"
 #define VRES_STR "240"
-#define PORT 8080
 #define SERVER_IP "10.0.0.127"
-#define SERVER_PORT 9000
+#define PORT_NUM 9000
+#define ERROR (-1)
+#define BACKLOG (10)
 
 static int sockfd;
+struct addrinfo *res;  // will point to the results
+volatile unsigned caught_signal = 0;
 
 // Format is used by a number of functions, so made as a file global
 static struct v4l2_format fmt;
@@ -75,26 +83,23 @@ static int              out_buf;
 static int              force_format=1;
 static int              frame_count = 30;
 
-void setup_socket_connection() 
+void cleanup() 
 {
-    struct sockaddr_in server_addr;
-
-    sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) 
+    if (sockfd != -1) 
     {
-        perror("Socket creation failed");
-        exit(EXIT_FAILURE);
+        shutdown(sockfd, SHUT_RDWR);
+        close(sockfd);
     }
 
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(SERVER_PORT);
-    inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr);
-
-    if (connect(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) < 0) 
+    if (res != NULL) 
     {
-        perror("Connection to server failed");
-        exit(EXIT_FAILURE);
+        freeaddrinfo(res);
     }
+}
+
+static void signal_handler (int signal_number)
+{
+    caught_signal = signal_number;
 }
 
 int send_all(int sockfd, const void *buffer, size_t length)
@@ -157,11 +162,6 @@ static void process_image(const void *p, int size)
     }
 
     printf("Frame sent: %d bytes\n", size);
-}
-
-void cleanup_socket_connection() 
-{
-    close(sockfd);
 }
 
 static void errno_exit(const char *s)
@@ -904,6 +904,18 @@ long_options[] = {
 
 int main(int argc, char **argv)
 {
+    openlog("socket", LOG_PID | LOG_CONS, LOG_USER);
+
+    int status;
+    socklen_t addr_size;
+    struct addrinfo hints;
+    struct sockaddr_storage their_addr;
+    struct sockaddr_in server_addr;
+    int opt = 1;
+    int new_fd;
+    char client_ip[INET_ADDRSTRLEN];     
+    addr_size = sizeof their_addr;
+
     if(argc > 1)
         dev_name = argv[1];
     else
@@ -966,16 +978,92 @@ int main(int argc, char **argv)
         }
     }
 
-    setup_socket_connection();
-
     open_device();
     init_device();
     start_capturing();
-    mainloop();
+
+    memset(&hints, 0, sizeof hints);    // Make sure the struct is empty
+    hints.ai_family = AF_INET;          // IPv4
+    hints.ai_socktype = SOCK_STREAM;    // TCP stream sockets
+    hints.ai_flags = AI_PASSIVE;        // Fill in my IP for me
+
+    if ((status = getaddrinfo(NULL, "9000", &hints, &res)) != 0) 
+    {
+        syslog(LOG_ERR, "getaddrinfo failed");
+        goto exit_on_fail;
+    }
+
+    /* Create a socket */
+    if ((sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) == -1)
+    {
+        syslog(LOG_ERR, "Failed to make a socket");
+        goto exit_on_fail;
+    }
+
+    /* Allow reuse of socket */
+    struct timeval timeout;
+    timeout.tv_sec = 5;  // 5 seconds timeout
+    timeout.tv_usec = 0;
+    if(setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout)) != 0)
+    {
+        syslog(LOG_ERR, "Socket reuse failed");
+        goto exit_on_fail;
+    }
+    
+    server_addr.sin_family = AF_INET;
+    server_addr.sin_addr.s_addr = INADDR_ANY;
+    server_addr.sin_port=htons(PORT_NUM);
+
+    /* Bind it to the port we passed in to getaddrinfo(): */
+    if (bind(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) == -1) 
+    {
+        syslog(LOG_ERR, "bind failed: %s", strerror(errno));
+        goto exit_on_fail;
+    }
+
+    if (listen(sockfd, BACKLOG) == -1)
+    {
+        syslog(LOG_ERR, "Listen failed");
+        goto exit_on_fail;
+    }
+
+    /* Setup signal handlers*/
+    struct sigaction new_action;
+    memset(&new_action, 0, sizeof(struct sigaction));
+    new_action.sa_handler = signal_handler;
+
+    if (sigaction(SIGTERM, &new_action, NULL) != 0)
+    {
+        syslog(LOG_ERR, "Sigaction for SIGTERM failed");
+    }
+
+    if (sigaction(SIGINT, &new_action, NULL))
+    {
+        syslog(LOG_ERR, "Sigaction for SIGINT failed");
+    }
+
+    new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &addr_size);
+    if (new_fd == -1)
+    {
+        syslog(LOG_ERR, "Accept failed: %s", strerror(errno));
+        goto exit_on_fail;
+    }
+
+    inet_ntop(their_addr.ss_family, &(((struct sockaddr_in*)&their_addr)->sin_addr), client_ip, sizeof(client_ip));
+    syslog(LOG_DEBUG, "Accepted connection from %s", client_ip);
+
+    /* Now accept incoming connections in a loop while signal not caught*/
+    while (!caught_signal)
+    {
+        mainloop();
+    }
+
+exit_on_fail:
     stop_capturing();
     uninit_device();
     close_device();
-    cleanup_socket_connection();
+    cleanup();
+    closelog();
     fprintf(stderr, "\n");
-    return 0;
+    exit(1);
 }

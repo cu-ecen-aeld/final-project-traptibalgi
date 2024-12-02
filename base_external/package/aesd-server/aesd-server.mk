@@ -6,11 +6,11 @@
 ##############################################################
 
 #TODO: Fill up the contents below in order to reference your assignment 3 git contents
-AESD_SERVER_VERSION = 'c357fa2191ec9ae91439fd62e98c29ad95b646a0'
+AESD_SERVER_VERSION = '5a67021b9e3aac43e3440b1c5e8c90ab70143180'
 # Note: Be sure to reference the *ssh* repository URL here (not https) to work properly
 # with ssh keys and the automated build/test system.
 # Your site should start with git@github.com:
-AESD_SERVER_SITE = 'git@github.com:traptibalgi/aesdproject.git'
+AESD_SERVER_SITE = 'git@github.com:cu-ecen-aeld/final-project-traptibalgi.git'
 AESD_SERVER_SITE_METHOD = git
 
 define AESD_SERVER_BUILD_CMDS

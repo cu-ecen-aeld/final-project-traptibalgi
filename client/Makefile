@@ -19,7 +19,7 @@ OBJS= ${CPPFILES:.cpp=.o}
 all:	client
 
 clean:
-	-rm -f *.o *.d *.ppm *.pgm
+	-rm -f *.o *.d *.ppm *.pgm *.jpg
 	-rm -f client
 
 distclean:

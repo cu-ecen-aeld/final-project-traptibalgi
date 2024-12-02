@@ -47,7 +47,6 @@
 #define VRES 240
 #define HRES_STR "320"
 #define VRES_STR "240"
-#define SERVER_IP "10.0.0.127"
 #define PORT_NUM 9000
 #define ERROR (-1)
 #define BACKLOG (10)
@@ -1004,7 +1003,7 @@ int main(int argc, char **argv)
     struct timeval timeout;
     timeout.tv_sec = 5;  // 5 seconds timeout
     timeout.tv_usec = 0;
-    if(setsockopt(sockfd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout)) != 0)
+    if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&timeout, sizeof(timeout)) != 0)
     {
         syslog(LOG_ERR, "Socket reuse failed");
         goto exit_on_fail;
@@ -1042,20 +1041,24 @@ int main(int argc, char **argv)
         syslog(LOG_ERR, "Sigaction for SIGINT failed");
     }
 
-    new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &addr_size);
-    if (new_fd == -1)
-    {
-        syslog(LOG_ERR, "Accept failed: %s", strerror(errno));
-        goto exit_on_fail;
-    }
-
-    inet_ntop(their_addr.ss_family, &(((struct sockaddr_in*)&their_addr)->sin_addr), client_ip, sizeof(client_ip));
-    syslog(LOG_DEBUG, "Accepted connection from %s", client_ip);
-
-    /* Now accept incoming connections in a loop while signal not caught*/
     while (!caught_signal)
     {
-        mainloop();
+        new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &addr_size);
+        if (new_fd == -1)
+        {
+            syslog(LOG_ERR, "Accept failed: %s", strerror(errno));
+            goto exit_on_fail;
+        }
+
+        inet_ntop(their_addr.ss_family, &(((struct sockaddr_in*)&their_addr)->sin_addr), client_ip, sizeof(client_ip));
+        syslog(LOG_DEBUG, "Accepted connection from %s", client_ip);
+
+        /* Now accept incoming connections in a loop while signal not caught*/
+        while (!caught_signal)
+        {
+            mainloop();
+        }
+
     }
 
 exit_on_fail:

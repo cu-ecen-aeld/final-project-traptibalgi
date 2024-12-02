@@ -75,7 +75,7 @@ int main()
         if(bytes_received == BUF_SIZE)
         {
                 
-                Mat frame(320, 240, CV_8UC3, buffer);
+                Mat frame(240, 320, CV_8UC3, buffer);
                 
                 if (frame.empty()) 
                 {
@@ -90,14 +90,16 @@ int main()
         {
             fprintf(stderr, "Bytes received %d. But buffer size %d\n", bytes_received, BUF_SIZE);
         }
+        
+        for (size_t i = 0; i <frames.size(); ++i)
+        {
+            char filename[64];
+            snprintf(filename, sizeof(filename), "frame_%03zu.jpg",i);
+            imwrite(filename, frames[i]);
+        }
+        
     }
     
-    for (size_t i = 0; i < frames.size();++i)
-    {
-        char filename[64];
-        snprintf(filename,sizeof(filename),"frame_%03zu.ppm",i);
-        imwrite(filename, frames[i]);
-    }
 
     close(client_fd);
     close(sockfd);

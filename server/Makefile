@@ -1,9 +1,9 @@
-CXX = $(CROSS_COMPILE)g++
-CXXFLAGS = -O0 -g -I/usr/include/opencv4
+CC = $(CROSS_COMPILE)gcc
+CFLAGS = -O0 -g -I/usr/include/opencv4
 LDFLAGS = `pkg-config --cflags --libs opencv4`
-TARGET = trafficlight
+TARGET = capture
 
-SRC = trafficlight.cpp
+SRC = capture.c
 
 all: $(TARGET)
 
@@ -12,6 +12,4 @@ $(TARGET): $(SRC)
 
 clean:
 	rm -f $(TARGET)
-
-
 

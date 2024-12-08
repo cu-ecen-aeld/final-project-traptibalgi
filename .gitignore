@@ -2,5 +2,7 @@
 build/
 .vscode/
 *.log
-simple-capture
-client
+server/capture
+!server/capture.c
+client/trafficlight
+!client/trafficlight.cpp

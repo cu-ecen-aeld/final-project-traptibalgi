@@ -21,23 +21,67 @@
 #include "opencv2/imgproc.hpp"
 
 #define PORT_NUM (9000)
-#define SERVER_IP "127.0.0.1" //"10.0.0.127"
+#define SERVER_IP "10.0.0.127"//"127.0.0.1" //"10.0.0.127"
 #define ERROR (-1)
 #define HRES (640)
 #define VRES (480)
 #define FRAME_SIZE (HRES * VRES * 3)
+
+#include <wiringPi.h>
+
+#define GREEN_LED_PIN 0 // GPIO17
+#define RED_LED_PIN 1 // GPIO18
+#define YELLOW_LED_PIN 3 // GPIO22
 
 using namespace cv;
 using namespace std;
 
 volatile unsigned caught_signal = 0;
 
+enum TrafficLightColor {
+    RED,
+    YELLOW,
+    GREEN
+};
+
 static void signal_handler(int signal_number)
 {
     caught_signal = signal_number;
 }
 
-void detect(cv::Mat& img) {
+void setupGPIO() 
+{
+    wiringPiSetup();
+    pinMode(GREEN_LED_PIN, OUTPUT);
+    digitalWrite(GREEN_LED_PIN, LOW);
+    pinMode(RED_LED_PIN, OUTPUT);
+    digitalWrite(RED_LED_PIN, LOW);
+    pinMode(YELLOW_LED_PIN, OUTPUT);
+    digitalWrite(YELLOW_LED_PIN, LOW); 
+}
+
+void controlLED(TrafficLightColor color) 
+{
+    digitalWrite(GREEN_LED_PIN, LOW);
+    digitalWrite(YELLOW_LED_PIN, LOW);
+    digitalWrite(RED_LED_PIN, LOW);
+
+    switch (color) 
+    {
+        case RED:
+            digitalWrite(RED_LED_PIN, HIGH);
+            break;
+        case YELLOW:
+            digitalWrite(YELLOW_LED_PIN, HIGH);
+            break;
+        case GREEN:
+            digitalWrite(GREEN_LED_PIN, HIGH);
+            break;
+    }
+}
+
+void detect(cv::Mat& img) 
+{
     cv::Mat cimg = img.clone();
     cv::Mat hsv, mask1, mask2, maskg, masky;
     int font = cv::FONT_HERSHEY_SIMPLEX;
@@ -66,69 +110,87 @@ void detect(cv::Mat& img) {
     cv::HoughCircles(maskr, r_circles, cv::HOUGH_GRADIENT, 1, 80, 50, 10, 0, 30);
     cv::HoughCircles(maskg, g_circles, cv::HOUGH_GRADIENT, 1, 60, 50, 10, 0, 30);
     cv::HoughCircles(masky, y_circles, cv::HOUGH_GRADIENT, 1, 30, 50, 5, 0, 30);
+    
+    int detected = 0;
 
     // Red circle detection
-    for (const auto& i : r_circles) {
+    for (const auto& i : r_circles) 
+    {
         if (i[0] > size.width || i[1] > size.height || i[1] > size.height * bound)
             continue;
 
         double h = 0.0, s = 0.0;
-        for (int m = -r; m < r; ++m) {
-            for (int n = -r; n < r; ++n) {
+        for (int m = -r; m < r; ++m) 
+        {
+            for (int n = -r; n < r; ++n) 
+            {
                 if ((i[1] + m) >= size.height || (i[0] + n) >= size.width)
                     continue;
                 h += maskr.at<uchar>(i[1] + m, i[0] + n);
                 s += 1;
             }
         }
-        if (h / s > 50) {
+        if (h / s > 50) 
+        {
             cv::circle(cimg, cv::Point(i[0], i[1]), i[2] + 10, cv::Scalar(0, 255, 0), 2);
             cv::putText(cimg, "RED", cv::Point(i[0], i[1]), font, 1, cv::Scalar(255, 0, 0), 2, cv::LINE_AA);
-        }
+            controlLED(RED);
+        }      
     }
 
     // Green circle detection
-    for (const auto& i : g_circles) {
+    for (const auto& i : g_circles) 
+    {
         if (i[0] > size.width || i[1] > size.height || i[1] > size.height * bound)
             continue;
 
         double h = 0.0, s = 0.0;
-        for (int m = -r; m < r; ++m) {
-            for (int n = -r; n < r; ++n) {
+        for (int m = -r; m < r; ++m) 
+        {
+            for (int n = -r; n < r; ++n) 
+            {
                 if ((i[1] + m) >= size.height || (i[0] + n) >= size.width)
                     continue;
                 h += maskg.at<uchar>(i[1] + m, i[0] + n);
                 s += 1;
             }
         }
-        if (h / s > 100) {
+        if (h / s > 100) 
+        {
             cv::circle(cimg, cv::Point(i[0], i[1]), i[2] + 10, cv::Scalar(0, 255, 0), 2);
             cv::putText(cimg, "GREEN", cv::Point(i[0], i[1]), font, 1, cv::Scalar(255, 0, 0), 2, cv::LINE_AA);
+            controlLED(GREEN);
         }
     }
 
     // Yellow circle detection
-    for (const auto& i : y_circles) {
+    for (const auto& i : y_circles) 
+    {
         if (i[0] > size.width || i[1] > size.height || i[1] > size.height * bound)
             continue;
 
         double h = 0.0, s = 0.0;
-        for (int m = -r; m < r; ++m) {
-            for (int n = -r; n < r; ++n) {
+        for (int m = -r; m < r; ++m) 
+        {
+            for (int n = -r; n < r; ++n) 
+            {
                 if ((i[1] + m) >= size.height || (i[0] + n) >= size.width)
                     continue;
                 h += masky.at<uchar>(i[1] + m, i[0] + n);
                 s += 1;
             }
         }
-        if (h / s > 50) {
+        if (h / s > 50) 
+        {
             cv::circle(cimg, cv::Point(i[0], i[1]), i[2] + 10, cv::Scalar(0, 255, 0), 2);
             cv::putText(cimg, "YELLOW", cv::Point(i[0], i[1]), font, 1, cv::Scalar(255, 0, 0), 2, cv::LINE_AA);
+            controlLED(YELLOW);
         }
     }
+    
 
     cv::imshow("Detected Results", cimg);
-    cv::waitKey(1);  // To allow continuous video feed
+    cv::waitKey(1);
 }
 
 int receive_and_process_data(int sockfd)
@@ -169,7 +231,6 @@ int receive_and_process_data(int sockfd)
             }
             
             // Convert BGR to RGB for displaying
-            
             Mat display_frame;
             cvtColor(frame, display_frame, COLOR_BGR2RGB);
             
@@ -194,6 +255,8 @@ int main()
     struct sigaction new_action;
     memset(&new_action, 0, sizeof(struct sigaction));
     new_action.sa_handler = signal_handler;
+    
+    setupGPIO();
 
     if (sigaction(SIGTERM, &new_action, NULL) != 0)
     {

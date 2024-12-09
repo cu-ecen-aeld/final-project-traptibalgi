@@ -17,7 +17,6 @@
 #include <iostream>
 #include <wiringPi.h>
 #include <thread>
-#include "circular_buffer.h"
 
 #include "opencv2/core.hpp"
 #include "opencv2/highgui.hpp"
@@ -43,7 +42,6 @@ enum TrafficLightColor {
     GREEN
 };
 
-struct aesd_circular_buffer cb;
 pthread_mutex_t frame_mutex;
 
 /* The structure for the receiver thread*/
@@ -210,43 +208,38 @@ void detect(cv::Mat& img)
     cv::waitKey(1);
 }
 
-void *receiver_thread(void *receiver_thread_params_struct) {
+std::vector<uchar> buffer(FRAME_SIZE);
+
+void *receiver_thread(void *receiver_thread_params_struct)
+{
     syslog(LOG_DEBUG, "receiver_thread");
 
     receiver_thread_params_t *receiver_thread_params = (receiver_thread_params_t*)receiver_thread_params_struct;
-    if (receiver_thread_params == NULL) {
+    if (receiver_thread_params == NULL)
+    {
         syslog(LOG_ERR, "receiver_thread: Receiver thread struct is NULL");
         return NULL;
     }
 
-    while (!caught_signal) {
+    while (!caught_signal) 
+    {
         size_t total_received = 0;
 
-        if (pthread_mutex_lock(&frame_mutex) != 0) {
+        if (pthread_mutex_lock(&frame_mutex) != 0)
+        {
             syslog(LOG_ERR, "receiver_thread: Failed to lock mutex");
             continue;
         }
 
-        struct aesd_buffer_entry *entry = &cb.entry[cb.in_offs];
-        entry->buffptr = cb.buffer_storage[cb.in_offs];
-        entry->size = 0;
-
-        while (total_received < FRAME_SIZE) {
-            ssize_t length = recv(receiver_thread_params->client_fd, entry->buffptr + total_received, FRAME_SIZE - total_received, 0);
-            if (length <= 0) {
+        while (total_received < FRAME_SIZE) 
+        {
+            ssize_t length = recv(receiver_thread_params->client_fd, buffer.data() + total_received, FRAME_SIZE - total_received, 0);
+            if (length <= 0) 
+            {
                 syslog(LOG_ERR, "recv failed: %s", strerror(errno));
-                pthread_mutex_unlock(&frame_mutex);
                 return NULL;
             }
             total_received += length;
-        }
-
-        entry->size = total_received;
-
-        const char *old_buffer = aesd_circular_buffer_add_entry(&cb, entry);
-
-        if (old_buffer != NULL) {
-            syslog(LOG_DEBUG, "Receiver thread overwrote oldest buffer entry");
         }
 
         pthread_mutex_unlock(&frame_mutex);
@@ -257,16 +250,19 @@ void *receiver_thread(void *receiver_thread_params_struct) {
     pthread_exit(nullptr);
 }
 
-void* process_thread(void *process_thread_params_struct) {
+void* process_thread(void *arg) {
+
     syslog(LOG_DEBUG, "process_thread");
 
-    process_thread_params_t *process_thread_params = (process_thread_params_t*)process_thread_params_struct;
-    if (process_thread_params == NULL) {
-        syslog(LOG_ERR, "process_thread: Process thread struct is NULL");
+    receiver_thread_params_t *data = (receiver_thread_params_t*)arg;
+    if (data == NULL)
+    {
+        syslog(LOG_ERR, "receiver_thread: Receiver thread struct is NULL");
         return NULL;
     }
 
     while (!caught_signal) {
+
         syslog(LOG_DEBUG, "process_loop");
 
         if (pthread_mutex_lock(&frame_mutex) != 0) {
@@ -274,15 +270,9 @@ void* process_thread(void *process_thread_params_struct) {
             continue;
         }
 
-        const struct aesd_buffer_entry *entry = aesd_circular_buffer_read_and_remove(&cb);
-        if (entry == NULL) {
-            syslog(LOG_DEBUG, "Process thread: No entry available to process");
-            pthread_mutex_unlock(&frame_mutex);
-            continue;
-        }
-
-        Mat frame(VRES, HRES, CV_8UC3, entry->buffptr);
-
+        // Process the frame data
+        Mat frame(VRES, HRES, CV_8UC3, buffer.data());
+        
         pthread_mutex_unlock(&frame_mutex);
 
         if (frame.data == nullptr) {
@@ -291,7 +281,7 @@ void* process_thread(void *process_thread_params_struct) {
         }
 
         if (frame.empty()) {
-            syslog(LOG_ERR, "Process thread: empty frame");
+            syslog(LOG_ERR, "Processor thread [%d]: empty frame", data->thread_id);
             continue;
         }
 
@@ -302,7 +292,6 @@ void* process_thread(void *process_thread_params_struct) {
 
     pthread_exit(nullptr);
 }
-
 
 int main()
 {
@@ -321,8 +310,6 @@ int main()
         syslog(LOG_ERR, "Creating mutex failed");
         exit(EXIT_FAILURE);
     }
-
-    aesd_circular_buffer_init(&cb);
     
     setupGPIO();
 

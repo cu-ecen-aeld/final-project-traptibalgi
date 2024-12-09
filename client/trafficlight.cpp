@@ -15,34 +15,49 @@
 #include <signal.h>
 #include <pthread.h>
 #include <iostream>
+#include <wiringPi.h>
+#include <thread>
 
 #include "opencv2/core.hpp"
 #include "opencv2/highgui.hpp"
 #include "opencv2/imgproc.hpp"
 
 #define PORT_NUM (9000)
-#define SERVER_IP "10.0.0.127"//"127.0.0.1" //"10.0.0.127"
+#define SERVER_IP "127.0.0.1"//"127.0.0.1" //"10.0.0.127"
 #define ERROR (-1)
 #define HRES (640)
 #define VRES (480)
 #define FRAME_SIZE (HRES * VRES * 3)
-
-#include <wiringPi.h>
-
-#define GREEN_LED_PIN 0 // GPIO17
-#define RED_LED_PIN 1 // GPIO18
-#define YELLOW_LED_PIN 3 // GPIO22
+#define NUM_THREADS (2)
+#define GREEN_LED_PIN (0) // GPIO17
+#define RED_LED_PIN (1) // GPIO18
+#define YELLOW_LED_PIN (3) // GPIO22
 
 using namespace cv;
 using namespace std;
-
-volatile unsigned caught_signal = 0;
 
 enum TrafficLightColor {
     RED,
     YELLOW,
     GREEN
 };
+
+pthread_mutex_t frame_mutex;
+
+/* The structure for the receiver thread*/
+typedef struct receiver_thread_params
+{
+    pthread_t thread_id;
+    int client_fd;
+} receiver_thread_params_t;
+
+/* The structure for the process thread*/
+typedef struct process_thread_params
+{
+    pthread_t thread_id;
+} process_thread_params_t;
+
+volatile unsigned caught_signal = 0;
 
 static void signal_handler(int signal_number)
 {
@@ -193,68 +208,108 @@ void detect(cv::Mat& img)
     cv::waitKey(1);
 }
 
-int receive_and_process_data(int sockfd)
-{
-    syslog(LOG_DEBUG, "in receive_and_process_data");
-    std::vector<uchar> buffer(FRAME_SIZE);
-    int retval = 0;
-    int frame_count = 0;
-    Mat frame, gray, roi;
-    vector<vector<Point>> rectangles;
+std::vector<uchar> buffer(FRAME_SIZE);
 
-    while (!caught_signal)
+void *receiver_thread(void *receiver_thread_params_struct)
+{
+    syslog(LOG_DEBUG, "receiver_thread");
+
+    receiver_thread_params_t *receiver_thread_params = (receiver_thread_params_t*)receiver_thread_params_struct;
+    if (receiver_thread_params == NULL)
+    {
+        syslog(LOG_ERR, "receiver_thread: Receiver thread struct is NULL");
+        return NULL;
+    }
+
+    while (!caught_signal) 
     {
         size_t total_received = 0;
-        while (total_received < FRAME_SIZE)
+
+        if (pthread_mutex_lock(&frame_mutex) != 0)
         {
-            ssize_t length = recv(sockfd, buffer.data() + total_received, FRAME_SIZE - total_received, 0);
-            if (length <= 0)
+            syslog(LOG_ERR, "receiver_thread: Failed to lock mutex");
+            continue;
+        }
+
+        while (total_received < FRAME_SIZE) 
+        {
+            ssize_t length = recv(receiver_thread_params->client_fd, buffer.data() + total_received, FRAME_SIZE - total_received, 0);
+            if (length <= 0) 
             {
-                if (length == 0)
-                    syslog(LOG_INFO, "Server disconnected.");
-                else
-                    syslog(LOG_ERR, "recv failed: %s", strerror(errno));
-                return ERROR;
+                syslog(LOG_ERR, "recv failed: %s", strerror(errno));
+                return NULL;
             }
             total_received += length;
         }
 
-        syslog(LOG_DEBUG, "Total received: %zu bytes", total_received);
+        pthread_mutex_unlock(&frame_mutex);
 
-        if (total_received == FRAME_SIZE)
-        {
-            Mat frame(VRES, HRES, CV_8UC3, buffer.data());
-            if (frame.empty())
-            {
-                syslog(LOG_ERR, "Error: Received empty frame");
-                continue;
-            }
-            
-            // Convert BGR to RGB for displaying
-            Mat display_frame;
-            cvtColor(frame, display_frame, COLOR_BGR2RGB);
-            
-            detect(display_frame);
-        }
-        else
-        {
-            syslog(LOG_ERR, "Received incomplete frame: %zu bytes", total_received);
-            retval = ERROR;
-        }
+        syslog(LOG_DEBUG, "Receiver thread added frame to CB");
     }
 
-    return retval;
+    pthread_exit(nullptr);
+}
+
+void* process_thread(void *arg) {
+
+    syslog(LOG_DEBUG, "process_thread");
+
+    receiver_thread_params_t *data = (receiver_thread_params_t*)arg;
+    if (data == NULL)
+    {
+        syslog(LOG_ERR, "receiver_thread: Receiver thread struct is NULL");
+        return NULL;
+    }
+
+    while (!caught_signal) {
+
+        syslog(LOG_DEBUG, "process_loop");
+
+        if (pthread_mutex_lock(&frame_mutex) != 0) {
+            syslog(LOG_ERR, "process_thread: Failed to lock mutex");
+            continue;
+        }
+
+        // Process the frame data
+        Mat frame(VRES, HRES, CV_8UC3, buffer.data());
+        
+        pthread_mutex_unlock(&frame_mutex);
+
+        if (frame.data == nullptr) {
+            syslog(LOG_ERR, "Process thread: Frame data is null");
+            continue;
+        }
+
+        if (frame.empty()) {
+            syslog(LOG_ERR, "Processor thread [%d]: empty frame", data->thread_id);
+            continue;
+        }
+
+        Mat display_frame;
+        cvtColor(frame, display_frame, COLOR_BGR2RGB);
+        detect(display_frame);
+    }
+
+    pthread_exit(nullptr);
 }
 
 int main()
 {
-    openlog("socket_client", LOG_PID | LOG_CONS, LOG_USER);
+    openlog("client", LOG_PID | LOG_CONS, LOG_USER);
+    pthread_t threads[NUM_THREADS];
+    receiver_thread_params_t *receiver_thread_params = NULL;
+    process_thread_params_t *process_thread_params = NULL;
     int sockfd;
     struct sockaddr_in server_addr;
-
     struct sigaction new_action;
     memset(&new_action, 0, sizeof(struct sigaction));
     new_action.sa_handler = signal_handler;
+    /* Create a mutex for synchronising writes to tmp_file*/
+    if(pthread_mutex_init(&frame_mutex, NULL) != 0)
+    {
+        syslog(LOG_ERR, "Creating mutex failed");
+        exit(EXIT_FAILURE);
+    }
     
     setupGPIO();
 
@@ -280,25 +335,63 @@ int main()
     if (inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr) <= 0)
     {
         syslog(LOG_ERR, "Invalid server IP address: %s", SERVER_IP);
-        close(sockfd);
-        exit(EXIT_FAILURE);
+        goto exit_on_fail;
     }
 
     if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1)
     {
         syslog(LOG_ERR, "Connection to server failed: %s", strerror(errno));
-        close(sockfd);
-        exit(EXIT_FAILURE);
+        goto exit_on_fail;
     }
 
     syslog(LOG_INFO, "Connected to server at %s:%d", SERVER_IP, PORT_NUM);
 
-    if (receive_and_process_data(sockfd) != 0)
+    receiver_thread_params = (receiver_thread_params_t*)malloc(sizeof(receiver_thread_params_t));
+    if(receiver_thread_params == NULL)
     {
-        syslog(LOG_ERR, "Error while receiving data");
+        syslog(LOG_ERR, "Malloc for receiver thread params failed");
+        goto exit_on_fail;
     }
 
+    receiver_thread_params->client_fd = sockfd;
+
+    if ((pthread_create(&(receiver_thread_params->thread_id), NULL, receiver_thread, (void*)receiver_thread_params)) != 0)
+    {
+        syslog(LOG_ERR, "Receiver thread creation failed");
+        goto exit_on_fail;
+    }
+
+    process_thread_params= (process_thread_params_t*)malloc(sizeof(process_thread_params_t));
+    if(process_thread_params == NULL)
+    {
+        syslog(LOG_ERR, "Malloc for process thread params failed");
+        goto exit_on_fail;
+    }
+
+    if ((pthread_create(&(process_thread_params->thread_id), NULL, process_thread, (void*)process_thread_params)) != 0)
+    {
+        syslog(LOG_ERR, "Process thread creation failed");
+        goto exit_on_fail;
+    }
+
+    syslog(LOG_DEBUG, "Size of receiver_thread_params_t: %zu", sizeof(receiver_thread_params_t));
+    syslog(LOG_DEBUG, "Size of process_thread_params_t: %zu", sizeof(process_thread_params_t));
+
+    pthread_join(process_thread_params->thread_id, NULL);
+    pthread_join(process_thread_params->thread_id, NULL);
+
+exit_on_fail:
+    if (receiver_thread_params != NULL)
+    {
+        free(receiver_thread_params);
+        receiver_thread_params = NULL;
+    }
+    if (process_thread_params != NULL)
+    {
+        free(process_thread_params);
+        process_thread_params = NULL;
+    }
     close(sockfd);
     closelog();
-    return 0;
+    exit(EXIT_FAILURE);
 }

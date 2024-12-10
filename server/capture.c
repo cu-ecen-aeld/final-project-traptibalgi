@@ -37,6 +37,7 @@
 #include <signal.h>
 #include <syslog.h>
 #include <netdb.h>
+#include <jpeglib.h>
 
 #define CLEAR(x) memset(&(x), 0, sizeof(x))
 #define COLOR_CONVERT
@@ -45,11 +46,12 @@
 #define PORT_NUM 9000
 #define ERROR (-1)
 #define BACKLOG (10)
+#define CLIENT_ADDRESS ("10.0.0.202")
 
-static int sockfd;
+static int server_fd;
 struct addrinfo *res;  // will point to the results
 volatile unsigned caught_signal = 0;
-int new_fd;
+struct sockaddr_in server_addr;
 
 // Format is used by a number of functions, so made as a file global
 static struct v4l2_format fmt;
@@ -74,20 +76,6 @@ struct buffer          *buffers;
 static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
-
-void cleanup() 
-{
-    if (sockfd != -1) 
-    {
-        shutdown(sockfd, SHUT_RDWR);
-        close(sockfd);
-    }
-
-    if (res != NULL) 
-    {
-        freeaddrinfo(res);
-    }
-}
 
 static void signal_handler (int signal_number)
 {
@@ -154,46 +142,17 @@ void yuv2rgb(int y, int u, int v, unsigned char *r, unsigned char *g, unsigned c
    *b = b1 ;
 }
 
-int send_all(int sockfd, const void *buffer, size_t length)
-{
-    syslog(LOG_DEBUG, "in send_all");
-    size_t total_sent = 0; 
-    const char *buf = (const char *)buffer;
-
-    while (total_sent < length)
-    {
-        ssize_t bytes_sent = send(sockfd, buf + total_sent, length - total_sent, 0);
-        if (bytes_sent < 0)
-        {
-            if (errno == EINTR) 
-            {
-                fprintf(stderr, "Retrying send... %zu/%zu bytes sent\n", total_sent, length);
-                continue;
-            }
-            else if (errno == EAGAIN || errno == EWOULDBLOCK) 
-            {
-                struct timespec retry_delay = { .tv_sec = 0, .tv_nsec = 10000000 }; // 10 ms
-                nanosleep(&retry_delay, NULL);
-                continue;
-            }
-            else
-            {
-                perror("Send failed");
-                return -1;
-            }
-        }
-
-        total_sent += bytes_sent;
-    }
-
-    return 0;
-}
-
 static void process_image(const void *p, int size) 
 {
     syslog(LOG_DEBUG, "in process_image, size is %d", size);
+
+    struct jpeg_compress_struct cinfo;
+    struct jpeg_error_mgr jerr;
+
     unsigned char rgb_buffer[HRES * VRES * 3];
     int i, j;
+    unsigned char *jpeg_buffer = NULL;
+    size_t jpeg_size = 0;
     unsigned char *yuyv = (unsigned char *)p;
     unsigned char *rgb = rgb_buffer;
 
@@ -208,25 +167,55 @@ static void process_image(const void *p, int size)
         yuv2rgb(y1, u, v, &rgb[j+3], &rgb[j+4], &rgb[j+5]);
     }
 
+    // Initialize JPEG compression
+    cinfo.err = jpeg_std_error(&jerr);
+    jpeg_create_compress(&cinfo);
+
+    // Set up memory destination
+    jpeg_mem_dest(&cinfo, &jpeg_buffer, &jpeg_size);
+
+    // Set image parameters
+    cinfo.image_width = HRES;
+    cinfo.image_height = VRES;
+    cinfo.input_components = 3;
+    cinfo.in_color_space = JCS_RGB;
+
+    // Set default compression parameters
+    jpeg_set_defaults(&cinfo);
+    jpeg_set_quality(&cinfo, 75, TRUE); // Quality range: 0-100
+
+    // Start compression
+    jpeg_start_compress(&cinfo, TRUE);
+
+    // Write scanlines
+    while (cinfo.next_scanline < cinfo.image_height) 
+    {
+        unsigned char *row_pointer[1];
+        row_pointer[0] = &rgb_buffer[cinfo.next_scanline * HRES * 3];
+        jpeg_write_scanlines(&cinfo, row_pointer, 1);
+    }
+
+    // Finish compression
+    jpeg_finish_compress(&cinfo);
+    jpeg_destroy_compress(&cinfo);
+
     syslog(LOG_DEBUG, "going to send");
 
-    if (send(new_fd, rgb_buffer, HRES * VRES * 3, 0) < 0)
+    socklen_t server_addr_len = sizeof(server_addr);
+    if (sendto(server_fd, jpeg_buffer, jpeg_size, 0, (struct sockaddr *)&server_addr, server_addr_len) < 0) 
     {
         syslog(LOG_ERR, "Send failed: %s", strerror(errno));
-        close(new_fd);
         exit(EXIT_FAILURE);
     }
 
-    syslog(LOG_DEBUG, "Frame sent: %d bytes\n", size);
+    syslog(LOG_DEBUG, "JPEG frame sent: %lu bytes\n", jpeg_size);
+    printf("JPEG frame sent: %lu bytes\n", jpeg_size);
 
-    //if (send_all(sockfd, rgb_buffer, HRES * VRES * 3) < 0)
-    //{
-    //    fprintf(stderr, "Send failed. Closing connection.\n");
-    //    close(sockfd);
-    //    exit(EXIT_FAILURE);
-    //}
-
-    printf("Frame sent: %d bytes\n", size);
+    // Free the JPEG buffer
+    if (jpeg_buffer) 
+    {
+        free(jpeg_buffer);
+    }
 }
 
 static int read_frame(void)
@@ -281,7 +270,7 @@ static void mainloop(void)
     read_delay.tv_sec=0;
     read_delay.tv_nsec=60000;
 
-    while (1)
+    while (!caught_signal)
     {
         for (;;)
         {
@@ -383,7 +372,7 @@ static void uninit_device(void)
 
 static void init_read(unsigned int buffer_size)
 {
-        buffers = (buffer*)calloc(1, sizeof(*buffers));
+        buffers = (struct buffer*)calloc(1, sizeof(*buffers));
 
         if (!buffers) 
         {
@@ -430,7 +419,7 @@ static void init_mmap(void)
                 exit(EXIT_FAILURE);
         }
 
-        buffers = (buffer*)calloc(req.count, sizeof(*buffers));
+        buffers = (struct buffer*)calloc(req.count, sizeof(*buffers));
 
         if (!buffers) 
         {
@@ -609,6 +598,24 @@ static void open_device(void)
         }
 }
 
+void cleanup() 
+{
+    stop_capturing();
+    uninit_device();
+    close_device();
+    if (server_fd != -1) 
+    {
+        shutdown(server_fd, SHUT_RDWR);
+        close(server_fd);
+    }
+
+    if (res != NULL) 
+    {
+        freeaddrinfo(res);
+    }
+    closelog();
+}
+
 // static void usage(FILE *fp, int argc, char **argv)
 // {
 //         fprintf(fp,
@@ -640,16 +647,12 @@ long_options[] = {
 
 int main(int argc, char **argv)
 {
-    openlog("socket", LOG_PID | LOG_CONS, LOG_USER);
+    openlog("server", LOG_PID | LOG_CONS, LOG_USER);
 
     int status;
-    socklen_t addr_size;
     struct addrinfo hints;
-    struct sockaddr_storage their_addr;
-    struct sockaddr_in server_addr;
-    int opt = 1;
-    char client_ip[INET_ADDRSTRLEN];     
-    addr_size = sizeof their_addr;
+    int optval = 1;
+    int flags;    
 
     if(argc > 1)
         dev_name = argv[1];
@@ -705,14 +708,13 @@ int main(int argc, char **argv)
         }
     }
 
-    int flags = fcntl(sockfd, F_GETFL, 0);
     open_device();
     init_device();
     start_capturing();
 
     memset(&hints, 0, sizeof hints);    // Make sure the struct is empty
     hints.ai_family = AF_INET;          // IPv4
-    hints.ai_socktype = SOCK_STREAM;    // TCP stream sockets
+    hints.ai_socktype = SOCK_DGRAM;    // TCP stream sockets
     hints.ai_flags = AI_PASSIVE;        // Fill in my IP for me
 
     if ((status = getaddrinfo(NULL, "9000", &hints, &res)) != 0) 
@@ -722,19 +724,17 @@ int main(int argc, char **argv)
     }
 
     /* Create a socket */
-    if ((sockfd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) == -1)
+    if ((server_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) == -1)
     {
         syslog(LOG_ERR, "Failed to make a socket");
         goto exit_on_fail;
     }
 
-    fcntl(sockfd, F_SETFL, flags & ~O_NONBLOCK);
+    flags = fcntl(server_fd, F_GETFL, 0);
+    fcntl(server_fd, F_SETFL, flags & ~O_NONBLOCK);
 
     /* Allow reuse of socket */
-    struct timeval timeout;
-    timeout.tv_sec = 5;  // 5 seconds timeout
-    timeout.tv_usec = 0;
-    if(setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&timeout, sizeof(timeout)) != 0)
+    if(setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&optval, sizeof(optval)) != 0)
     {
         syslog(LOG_ERR, "Socket reuse failed");
         goto exit_on_fail;
@@ -744,18 +744,7 @@ int main(int argc, char **argv)
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port=htons(PORT_NUM);
 
-    /* Bind it to the port we passed in to getaddrinfo(): */
-    if (bind(sockfd, (struct sockaddr*)&server_addr, sizeof(server_addr)) == -1) 
-    {
-        syslog(LOG_ERR, "bind failed: %s", strerror(errno));
-        goto exit_on_fail;
-    }
-
-    if (listen(sockfd, BACKLOG) == -1)
-    {
-        syslog(LOG_ERR, "Listen failed");
-        goto exit_on_fail;
-    }
+    inet_pton(res->ai_family, CLIENT_ADDRESS, &server_addr.sin_addr);
 
     /* Setup signal handlers*/
     struct sigaction new_action;
@@ -772,29 +761,14 @@ int main(int argc, char **argv)
         syslog(LOG_ERR, "Sigaction for SIGINT failed");
     }
 
-    new_fd = accept(sockfd, (struct sockaddr *)&their_addr, &addr_size);
-    if (new_fd == -1)
-    {
-        syslog(LOG_ERR, "Accept failed: %s", strerror(errno));
-        goto exit_on_fail;
-    }
-
-    inet_ntop(their_addr.ss_family, &(((struct sockaddr_in*)&their_addr)->sin_addr), client_ip, sizeof(client_ip));
-    syslog(LOG_DEBUG, "Accepted connection from %s", client_ip);
-
     /* Now accept incoming connections in a loop while signal not caught*/
     while (!caught_signal)
     {
         mainloop();
     }
 
-
 exit_on_fail:
-    stop_capturing();
-    uninit_device();
-    close_device();
     cleanup();
     closelog();
-    fprintf(stderr, "\n");
     exit(1);
 }

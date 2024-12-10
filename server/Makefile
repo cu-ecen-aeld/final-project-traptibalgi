@@ -1,15 +1,30 @@
-CC = $(CROSS_COMPILE)gcc
-CFLAGS = -O0 -g -I/usr/include/opencv4
-LDFLAGS = `pkg-config --cflags --libs opencv4`
-TARGET = capture
+INCLUDE_DIRS = 
+LIB_DIRS = 
+CC= $(CROSS_COMPILE)gcc
 
-SRC = capture.c
+CDEFS=
+CFLAGS= -O0 -g $(INCLUDE_DIRS) $(CDEFS)
+LIBS= -lrt -ljpeg
 
-all: $(TARGET)
+HFILES= 
+CFILES= capture.c
 
-$(TARGET): $(SRC)
-	$(CXX) $(CXXFLAGS) $(SRC) -o $(TARGET) -pthread $(LDFLAGS)
+SRCS= ${HFILES} ${CFILES}
+OBJS= ${CFILES:.c=.o}
+
+all:	capture
 
 clean:
-	rm -f $(TARGET)
+	-rm -f *.o
+	-rm -f capture
 
+distclean:
+	-rm -f *.o *.d
+
+capture: ${OBJS}
+	$(CC) $(LDFLAGS) $(CFLAGS) -o $@ $@.o $(LIBS)
+
+depend:
+
+.c.o:
+	$(CC) $(CFLAGS) -c $<

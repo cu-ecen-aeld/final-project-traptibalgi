@@ -2,14 +2,16 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
+#include <getopt.h>             /* getopt_long() */
+#include <fcntl.h>              /* low-level i/o */
+#include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <unistd.h>
 #include <fcntl.h>
-#include <sys/types.h>
 #include <sys/stat.h>
 #include <syslog.h>
 #include <signal.h>
@@ -17,13 +19,11 @@
 #include <iostream>
 #include <wiringPi.h>
 #include <thread>
-
 #include "opencv2/core.hpp"
 #include "opencv2/highgui.hpp"
 #include "opencv2/imgproc.hpp"
 
 #define PORT_NUM (9000)
-#define SERVER_IP "127.0.0.1"//"127.0.0.1" //"10.0.0.127"
 #define ERROR (-1)
 #define HRES (640)
 #define VRES (480)
@@ -32,6 +32,11 @@
 #define GREEN_LED_PIN (0) // GPIO17
 #define RED_LED_PIN (1) // GPIO18
 #define YELLOW_LED_PIN (3) // GPIO22
+#define MOVING_AVERAGE_WINDOW (100)
+
+int client_fd;
+cv::Mat latest_frame;
+struct addrinfo *res;  // will point to the results
 
 using namespace cv;
 using namespace std;
@@ -45,19 +50,24 @@ enum TrafficLightColor {
 pthread_mutex_t frame_mutex;
 
 /* The structure for the receiver thread*/
-typedef struct receiver_thread_params
+typedef struct receive_params
 {
     pthread_t thread_id;
-    int client_fd;
-} receiver_thread_params_t;
-
-/* The structure for the process thread*/
-typedef struct process_thread_params
-{
-    pthread_t thread_id;
-} process_thread_params_t;
+    int sock_fd;
+    struct sockaddr_in sock_addr;
+} receive_params_t;
 
 volatile unsigned caught_signal = 0;
+
+void cleanup() 
+{
+    if (client_fd != -1) 
+    {
+        shutdown(client_fd, SHUT_RDWR);
+        close(client_fd);
+    }
+    closelog();
+}
 
 static void signal_handler(int signal_number)
 {
@@ -203,115 +213,130 @@ void detect(cv::Mat& img)
         }
     }
     
-
-    cv::imshow("Detected Results", cimg);
+    cv::imshow("Traffic Light Detection", cimg);
     cv::waitKey(1);
 }
 
-std::vector<uchar> buffer(FRAME_SIZE);
-
-void *receiver_thread(void *receiver_thread_params_struct)
+void *process_thread(void *arg)
 {
-    syslog(LOG_DEBUG, "receiver_thread");
-
-    receiver_thread_params_t *receiver_thread_params = (receiver_thread_params_t*)receiver_thread_params_struct;
-    if (receiver_thread_params == NULL)
-    {
-        syslog(LOG_ERR, "receiver_thread: Receiver thread struct is NULL");
-        return NULL;
-    }
+    syslog(LOG_DEBUG, "process_thread");
 
     while (!caught_signal) 
     {
-        size_t total_received = 0;
-
-        if (pthread_mutex_lock(&frame_mutex) != 0)
+        cv::Mat frame;
+        static auto last_time = std::chrono::steady_clock::now();
+        double average_fps = 0.0;
+        int frame_count = 0;
+        
+        pthread_mutex_lock(&frame_mutex);
+        
+        // Check if a new frame is available
+        if (!latest_frame.empty()) 
         {
-            syslog(LOG_ERR, "receiver_thread: Failed to lock mutex");
-            continue;
-        }
+            frame = latest_frame.clone();
+            pthread_mutex_unlock(&frame_mutex);
+            detect(frame);
 
-        while (total_received < FRAME_SIZE) 
+            // Calculate and log FPS
+            auto current_time = std::chrono::steady_clock::now();
+            std::chrono::duration<double> elapsed = current_time - last_time;
+            double fps = 1.0 / elapsed.count();
+            last_time = current_time;
+
+            average_fps = ((average_fps * frame_count) + fps) / (frame_count + 1);
+            frame_count = std::min(frame_count + 1, MOVING_AVERAGE_WINDOW);
+
+            syslog(LOG_INFO, "PROCESS: Current FPS: %.2f, Average FPS: %.2f", fps, average_fps);
+        } 
+        else 
         {
-            ssize_t length = recv(receiver_thread_params->client_fd, buffer.data() + total_received, FRAME_SIZE - total_received, 0);
-            if (length <= 0) 
-            {
-                syslog(LOG_ERR, "recv failed: %s", strerror(errno));
-                return NULL;
-            }
-            total_received += length;
+            pthread_mutex_unlock(&frame_mutex);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
-
-        pthread_mutex_unlock(&frame_mutex);
-
-        syslog(LOG_DEBUG, "Receiver thread added frame to CB");
     }
 
-    pthread_exit(nullptr);
+    pthread_exit(NULL);
 }
 
-void* process_thread(void *arg) {
+void *receive_thread(void *receive_params_struct)
+{
+    syslog(LOG_DEBUG, "In receive_thread");
 
-    syslog(LOG_DEBUG, "process_thread");
-
-    receiver_thread_params_t *data = (receiver_thread_params_t*)arg;
-    if (data == NULL)
+    receive_params_t *receive_params = (receive_params_t*)receive_params_struct;
+    if (receive_params == NULL)
     {
-        syslog(LOG_ERR, "receiver_thread: Receiver thread struct is NULL");
-        return NULL;
+        syslog(LOG_ERR, "receive_thread: Receiver thread struct is NULL");
+        pthread_exit(NULL);
     }
 
-    while (!caught_signal) {
+    static auto last_time = std::chrono::steady_clock::now();
+    struct sockaddr_in client_addr = receive_params->sock_addr;
+    socklen_t client_len = sizeof(client_addr);
 
-        syslog(LOG_DEBUG, "process_loop");
+    double average_fps = 0.0;
+    int frame_count = 0;
 
-        if (pthread_mutex_lock(&frame_mutex) != 0) {
-            syslog(LOG_ERR, "process_thread: Failed to lock mutex");
+    while (!caught_signal) 
+    {
+        int bytes_received;
+        std::vector<unsigned char> jpeg_buffer(FRAME_SIZE);
+
+        // Receive the JPEG data
+        bytes_received = recvfrom(receive_params->sock_fd, jpeg_buffer.data(), jpeg_buffer.size(), 0, (struct sockaddr *)&(client_addr), &client_len);
+        if (bytes_received < 0)
+        {
+            syslog(LOG_ERR, "recvfrom() failed. Error: %s", strerror(errno));
             continue;
         }
+        else if (bytes_received > 0)
+        {
+            syslog(LOG_DEBUG, "Received %d bytes", bytes_received);
+            jpeg_buffer.resize(bytes_received);  // Resize to the actual received size
 
-        // Process the frame data
-        Mat frame(VRES, HRES, CV_8UC3, buffer.data());
-        
-        pthread_mutex_unlock(&frame_mutex);
+            // Decode the JPEG data
+            cv::Mat image = cv::imdecode(jpeg_buffer, cv::IMREAD_COLOR);
+            if (image.empty()) 
+            {
+                syslog(LOG_ERR, "Failed to decode JPEG image");
+                continue;
+            }
+            
+            // Calculate and log FPS
+            auto current_time = std::chrono::steady_clock::now();
+            std::chrono::duration<double> elapsed = current_time - last_time;
+            double fps = 1.0 / elapsed.count();
+            last_time = current_time;
 
-        if (frame.data == nullptr) {
-            syslog(LOG_ERR, "Process thread: Frame data is null");
-            continue;
+            average_fps = ((average_fps * frame_count) + fps) / (frame_count + 1);
+            frame_count = std::min(frame_count + 1, MOVING_AVERAGE_WINDOW);
+
+            syslog(LOG_INFO, "CAPTURE: Current FPS: %.2f, Average FPS: %.2f", fps, average_fps);
+
+            pthread_mutex_lock(&frame_mutex);
+            latest_frame = image.clone();
+            pthread_mutex_unlock(&frame_mutex);
         }
-
-        if (frame.empty()) {
-            syslog(LOG_ERR, "Processor thread [%d]: empty frame", data->thread_id);
-            continue;
-        }
-
-        Mat display_frame;
-        cvtColor(frame, display_frame, COLOR_BGR2RGB);
-        detect(display_frame);
     }
 
-    pthread_exit(nullptr);
+    pthread_exit(NULL);
 }
 
 int main()
 {
     openlog("client", LOG_PID | LOG_CONS, LOG_USER);
-    pthread_t threads[NUM_THREADS];
-    receiver_thread_params_t *receiver_thread_params = NULL;
-    process_thread_params_t *process_thread_params = NULL;
-    int sockfd;
-    struct sockaddr_in server_addr;
+
+    pthread_t process_thread_id;
+    receive_params_t *receive_params = NULL;
+
+    int status;
+    int optval = 1;
+    struct sockaddr_in client_addr;
+    struct addrinfo hints;
+    
+    /* Setup signal handlers*/
     struct sigaction new_action;
     memset(&new_action, 0, sizeof(struct sigaction));
     new_action.sa_handler = signal_handler;
-    /* Create a mutex for synchronising writes to tmp_file*/
-    if(pthread_mutex_init(&frame_mutex, NULL) != 0)
-    {
-        syslog(LOG_ERR, "Creating mutex failed");
-        exit(EXIT_FAILURE);
-    }
-    
-    setupGPIO();
 
     if (sigaction(SIGTERM, &new_action, NULL) != 0)
     {
@@ -322,76 +347,82 @@ int main()
         syslog(LOG_ERR, "Sigaction for SIGINT failed");
     }
 
-    if ((sockfd = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+    /* Create a mutex for synchronising writes to tmp_file*/
+    if(pthread_mutex_init(&frame_mutex, NULL) != 0)
     {
-        syslog(LOG_ERR, "Failed to create socket: %s", strerror(errno));
+        syslog(LOG_ERR, "Creating mutex failed");
         exit(EXIT_FAILURE);
     }
+    
+    setupGPIO();
 
-    memset(&server_addr, 0, sizeof(server_addr));
-    server_addr.sin_family = AF_INET;
-    server_addr.sin_port = htons(PORT_NUM);
+    memset(&hints, 0, sizeof hints);    // Make sure the struct is empty
+    hints.ai_family = AF_INET;          // IPv4
+    hints.ai_socktype = SOCK_DGRAM;    // TCP stream sockets
+    hints.ai_flags = AI_PASSIVE;        // Fill in my IP for me
 
-    if (inet_pton(AF_INET, SERVER_IP, &server_addr.sin_addr) <= 0)
+    if ((status = getaddrinfo(NULL, "9000", &hints, &res)) != 0) 
     {
-        syslog(LOG_ERR, "Invalid server IP address: %s", SERVER_IP);
+        syslog(LOG_ERR, "getaddrinfo failed");
         goto exit_on_fail;
     }
 
-    if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) == -1)
+    /* Create a socket */
+    if ((client_fd = socket(res->ai_family, res->ai_socktype, res->ai_protocol)) == -1)
     {
-        syslog(LOG_ERR, "Connection to server failed: %s", strerror(errno));
+        syslog(LOG_ERR, "Failed to make a socket");
         goto exit_on_fail;
     }
 
-    syslog(LOG_INFO, "Connected to server at %s:%d", SERVER_IP, PORT_NUM);
+    /* Allow reuse of socket */
+    if (setsockopt(client_fd, SOL_SOCKET, SO_REUSEADDR, &optval, sizeof(optval)) == -1) 
+    {
+        syslog(LOG_ERR, "Error setting socket options (SO_REUSEADDR)");
+        goto exit_on_fail;
+    }
 
-    receiver_thread_params = (receiver_thread_params_t*)malloc(sizeof(receiver_thread_params_t));
-    if(receiver_thread_params == NULL)
+    memset(&client_addr, 0, sizeof(client_addr));
+    client_addr.sin_family = AF_INET;
+    client_addr.sin_port = htons(PORT_NUM);
+    client_addr.sin_addr.s_addr = INADDR_ANY;
+
+    if (bind(client_fd, (struct sockaddr *)&client_addr, sizeof(client_addr)) == -1) 
+	{
+		syslog(LOG_ERR, "Error binding socket");
+		goto exit_on_fail;
+	}
+
+    receive_params = (receive_params_t*)malloc(sizeof(receive_params_t));
+    if(receive_params == NULL)
     {
         syslog(LOG_ERR, "Malloc for receiver thread params failed");
         goto exit_on_fail;
     }
 
-    receiver_thread_params->client_fd = sockfd;
+    receive_params->sock_fd = client_fd;
+    receive_params->sock_addr = client_addr;
 
-    if ((pthread_create(&(receiver_thread_params->thread_id), NULL, receiver_thread, (void*)receiver_thread_params)) != 0)
+    if ((pthread_create(&(receive_params->thread_id), NULL, receive_thread, (void*)receive_params)) != 0)
     {
         syslog(LOG_ERR, "Receiver thread creation failed");
         goto exit_on_fail;
     }
 
-    process_thread_params= (process_thread_params_t*)malloc(sizeof(process_thread_params_t));
-    if(process_thread_params == NULL)
+    if ((pthread_create(&(process_thread_id), NULL, process_thread, NULL)) != 0)
     {
-        syslog(LOG_ERR, "Malloc for process thread params failed");
+        syslog(LOG_ERR, "Receiver thread creation failed");
         goto exit_on_fail;
     }
 
-    if ((pthread_create(&(process_thread_params->thread_id), NULL, process_thread, (void*)process_thread_params)) != 0)
-    {
-        syslog(LOG_ERR, "Process thread creation failed");
-        goto exit_on_fail;
-    }
-
-    syslog(LOG_DEBUG, "Size of receiver_thread_params_t: %zu", sizeof(receiver_thread_params_t));
-    syslog(LOG_DEBUG, "Size of process_thread_params_t: %zu", sizeof(process_thread_params_t));
-
-    pthread_join(process_thread_params->thread_id, NULL);
-    pthread_join(process_thread_params->thread_id, NULL);
+    pthread_join(receive_params->thread_id, NULL);
+    pthread_join(process_thread_id, NULL);
 
 exit_on_fail:
-    if (receiver_thread_params != NULL)
+    if (receive_params != NULL)
     {
-        free(receiver_thread_params);
-        receiver_thread_params = NULL;
+        free(receive_params);
+        receive_params = NULL;
     }
-    if (process_thread_params != NULL)
-    {
-        free(process_thread_params);
-        process_thread_params = NULL;
-    }
-    close(sockfd);
-    closelog();
+    cleanup();
     exit(EXIT_FAILURE);
 }

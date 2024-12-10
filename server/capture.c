@@ -51,7 +51,7 @@
 #define PORT_NUM 9000
 #define ERROR (-1)
 #define BACKLOG (10)
-#define CLIENT_ADDRESS ("10.0.0.202")
+#define CLIENT_ADDRESS ("172.20.10.7")
 
 static int server_fd;
 struct addrinfo *res;  // will point to the results

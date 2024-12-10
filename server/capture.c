@@ -1,6 +1,8 @@
 /*
  *
- *  Adapted by Sam Siewert for use with UVC web cameras and Bt878 frame
+ *  Adapted by Trapti Damodar Balgi for use with a custom traffic light detection system on Raspberry Pi.
+ *
+ *  Originally adapted by Sam Siewert for use with UVC web cameras and Bt878 frame
  *  grabber NTSC cameras to acquire digital video from a source,
  *  time-stamp each frame acquired, save to a PGM or PPM file.
  *
@@ -9,10 +11,13 @@
  * 
  *  This program can be used and distributed without restrictions.
  *  
- *  Modified by Trapti Damodar Balgi for ECEN 5713
- *
  *      This program is provided with the V4L2 API
  * see http://linuxtv.org/docs.php for more information
+ * 
+ * References:
+ * 1. https://github.com/cu-ecen-aeld/buildroot-assignments-base/wiki/OpenCV-3-Setup-in-Buildroot
+ * 2. https://medium.com/@deepeshdeepakdd2/v4l-a-complete-practical-tutorial-c520f097b590
+ * 3. https://libjpeg.sourceforge.net/
  */
 
 #include <stdio.h>
@@ -77,17 +82,33 @@ static unsigned int     n_buffers;
 static int              out_buf;
 static int              force_format=1;
 
+/**
+ * signal_handler - Handles signals received by the program.
+ * @signal_number: The number of the signal received.
+ */
 static void signal_handler (int signal_number)
 {
     caught_signal = signal_number;
 }
 
+/**
+ * errno_exit - Handles errors by printing an error message and exiting.
+ * @s: A string that describes the source of the error.
+ */
 static void errno_exit(const char *s)
 {
         fprintf(stderr, "%s error %d, %s\n", s, errno, strerror(errno));
         exit(EXIT_FAILURE);
 }
 
+/**
+ * xioctl - Wrapper function for ioctl calls to handle EINTR interruptions.
+ * @fh: File descriptor for the video device.
+ * @request: The ioctl request code.
+ * @arg: Pointer to the argument passed to ioctl.
+ * 
+ * Returns: The return value of the ioctl call.
+ */
 static int xioctl(int fh, int request, void *arg)
 {
         int r;
@@ -116,6 +137,15 @@ static int xioctl(int fh, int request, void *arg)
 //              or as the name implies, 4Y and 2 UV pairs
 //      YUV420, where for every 4 Ys, there is a single UV pair, 1.5 bytes for each pixel or 36 bytes for 24 pixels
 
+/**
+ * yuv2rgb - Converts a YUYV color format to RGB.
+ * @y: The Y component of a pixel.
+ * @u: The U component of a pixel.
+ * @v: The V component of a pixel.
+ * @r: Pointer to the red component of the output pixel.
+ * @g: Pointer to the green component of the output pixel.
+ * @b: Pointer to the blue component of the output pixel.
+ */
 void yuv2rgb(int y, int u, int v, unsigned char *r, unsigned char *g, unsigned char *b)
 {
    int r1, g1, b1;
@@ -142,6 +172,11 @@ void yuv2rgb(int y, int u, int v, unsigned char *r, unsigned char *g, unsigned c
    *b = b1 ;
 }
 
+/**
+ * process_image - Processes an image by converting from YUYV to RGB and compressing to JPEG.
+ * @p: Pointer to the input YUYV data.
+ * @size: The size of the input data.
+ */
 static void process_image(const void *p, int size) 
 {
     syslog(LOG_DEBUG, "in process_image, size is %d", size);
@@ -218,6 +253,11 @@ static void process_image(const void *p, int size)
     }
 }
 
+/**
+ * read_frame - Reads a video frame from the device.
+ * 
+ * Returns: 1 if a frame was successfully read, 0 otherwise.
+ */
 static int read_frame(void)
 {
     syslog(LOG_DEBUG, "in read_frame");
@@ -260,6 +300,9 @@ static int read_frame(void)
     return 1;
 }
 
+/**
+ * mainloop - Main loop that handles reading video frames and processing them.
+ */
 static void mainloop(void)
 {
     syslog(LOG_DEBUG, "in mainloop");
@@ -317,6 +360,9 @@ static void mainloop(void)
     }
 }
 
+/**
+ * stop_capturing - Stops the video capture process.
+ */
 static void stop_capturing(void)
 {
         enum v4l2_buf_type type;
@@ -335,6 +381,9 @@ static void stop_capturing(void)
         }
 }
 
+/**
+ * start_capturing - Starts the video capture process.
+ */
 static void start_capturing(void)
 {
         unsigned int i;
@@ -359,6 +408,9 @@ static void start_capturing(void)
         
 }
 
+/**
+ * uninit_device - Uninitializes the video capture device and releases allocated resources.
+ */
 static void uninit_device(void)
 {
         unsigned int i;
@@ -370,6 +422,10 @@ static void uninit_device(void)
         free(buffers);
 }
 
+/**
+ * init_read - Initializes memory buffers for read I/O method.
+ * @buffer_size: The size of the buffer to allocate.
+ */
 static void init_read(unsigned int buffer_size)
 {
         buffers = (struct buffer*)calloc(1, sizeof(*buffers));
@@ -390,6 +446,9 @@ static void init_read(unsigned int buffer_size)
         }
 }
 
+/**
+ * init_mmap - Initializes memory-mapped buffers for I/O.
+ */
 static void init_mmap(void)
 {
         struct v4l2_requestbuffers req;
@@ -452,6 +511,9 @@ static void init_mmap(void)
         }
 }
 
+/**
+ * init_device - Initializes the video device, configuring its capabilities and format.
+ */
 static void init_device(void)
 {
     struct v4l2_capability cap;
@@ -565,7 +627,10 @@ static void init_device(void)
     init_mmap();
 }
 
-
+/**
+ * @brief Closes the video device and sets the file descriptor to -1.
+ * 
+ */
 static void close_device(void)
 {
         if (-1 == close(fd))
@@ -574,6 +639,13 @@ static void close_device(void)
         fd = -1;
 }
 
+/**
+ * @brief Opens the video device for reading and sets up its properties.
+ * 
+ * This function checks if the specified device is a valid character
+ * device, opens the device for reading and writing in non-blocking mode,
+ * and handles errors appropriately.
+ */
 static void open_device(void)
 {
         struct stat st;
@@ -597,6 +669,11 @@ static void open_device(void)
                 exit(EXIT_FAILURE);
         }
 }
+
+/**
+ * @brief Cleans up resources used by the program.
+ * 
+ */
 
 void cleanup() 
 {
@@ -645,6 +722,9 @@ long_options[] = {
         { 0, 0, 0, 0 }
 };
 
+/**
+ * @brief The main entry point for the server application.
+ */
 int main(int argc, char **argv)
 {
     openlog("server", LOG_PID | LOG_CONS, LOG_USER);

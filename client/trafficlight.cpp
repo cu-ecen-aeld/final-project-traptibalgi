@@ -1,3 +1,27 @@
+/**
+ * @file trafficlight.cpp
+ * @brief Traffic Light Detection and Control System - Client Side
+ *
+ * This program receives frames from a server of the traffic light detection system, processes the frames to
+ * identify traffic light colors (red, yellow, green), and controls LEDs corresponding to
+ * the detected traffic light color. The system uses OpenCV for image processing and socket
+ * communication for frame reception.
+ *
+ * Features:
+ * - Traffic light detection.
+ * - Real-time LED control based on detected light.
+ *
+ * @author Trapti Damodar Balgi
+ * @date 29th November 2024
+ * 
+ * References:
+ * 1. https://docs.opencv.org/4.x/da/d53/tutorial_py_houghcircles.html
+ * 2. https://docs.opencv.org/4.x/df/d9d/tutorial_py_colorspaces.html
+ * 3. https://github.com/cu-ecen-aeld/buildroot-assignments-base/wiki/V4L2-Drivers-for-Camera-interfacing
+ * 4. https://roboticsbackend.com/introduction-to-wiringpi-for-raspberry-pi/
+ * 5. https://github.com/HevLfreis/TrafficLight-Detector
+ */
+
 #include "opencv2/opencv.hpp"
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -23,6 +47,9 @@
 #include "opencv2/highgui.hpp"
 #include "opencv2/imgproc.hpp"
 
+using namespace cv;
+using namespace std;
+
 #define PORT_NUM (9000)
 #define ERROR (-1)
 #define HRES (640)
@@ -34,20 +61,18 @@
 #define YELLOW_LED_PIN (3) // GPIO22
 #define MOVING_AVERAGE_WINDOW (100)
 
-int client_fd;
-cv::Mat latest_frame;
-struct addrinfo *res;  // will point to the results
-
-using namespace cv;
-using namespace std;
-
+/* Enumeration for traffic light colors. */
 enum TrafficLightColor {
     RED,
     YELLOW,
     GREEN
 };
 
+int client_fd;
+cv::Mat latest_frame;
+struct addrinfo *res;  // will point to the results
 pthread_mutex_t frame_mutex;
+volatile unsigned caught_signal = 0;
 
 /* The structure for the receiver thread*/
 typedef struct receive_params
@@ -57,8 +82,9 @@ typedef struct receive_params
     struct sockaddr_in sock_addr;
 } receive_params_t;
 
-volatile unsigned caught_signal = 0;
-
+/**
+ * @brief Cleans up resources during program termination.
+ */
 void cleanup() 
 {
     if (client_fd != -1) 
@@ -69,11 +95,18 @@ void cleanup()
     closelog();
 }
 
+/**
+ * @brief Signal handler for program termination.
+ * @param signal_number The signal number received.
+ */
 static void signal_handler(int signal_number)
 {
     caught_signal = signal_number;
 }
 
+/**
+ * @brief Initializes GPIO pins for LED control.
+ */
 void setupGPIO() 
 {
     wiringPiSetup();
@@ -85,6 +118,10 @@ void setupGPIO()
     digitalWrite(YELLOW_LED_PIN, LOW); 
 }
 
+/**
+ * @brief Controls the state of LEDs based on detected traffic light color.
+ * @param color Detected traffic light color.
+ */
 void controlLED(TrafficLightColor color) 
 {
     digitalWrite(GREEN_LED_PIN, LOW);
@@ -105,6 +142,10 @@ void controlLED(TrafficLightColor color)
     }
 }
 
+/**
+ * @brief Detects traffic light color from a given frame.
+ * @param img Input frame for traffic light detection.
+ */
 void detect(cv::Mat& img) 
 {
     cv::Mat cimg = img.clone();
@@ -217,6 +258,11 @@ void detect(cv::Mat& img)
     cv::waitKey(1);
 }
 
+/**
+ * @brief Thread function to process video frames.
+ * @param arg Thread arguments (unused).
+ * @return void*
+ */
 void *process_thread(void *arg)
 {
     syslog(LOG_DEBUG, "process_thread");
@@ -251,13 +297,18 @@ void *process_thread(void *arg)
         else 
         {
             pthread_mutex_unlock(&frame_mutex);
-            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+            usleep(10 * 1000);
         }
     }
 
     pthread_exit(NULL);
 }
 
+/**
+ * @brief Thread function to receive video frames over a socket.
+ * @param receive_params_struct Pointer to receive thread parameters.
+ * @return void*
+ */
 void *receive_thread(void *receive_params_struct)
 {
     syslog(LOG_DEBUG, "In receive_thread");
@@ -321,6 +372,10 @@ void *receive_thread(void *receive_params_struct)
     pthread_exit(NULL);
 }
 
+/**
+ * @brief Entry point of the program.
+ * @return int Exit status.
+ */
 int main()
 {
     openlog("client", LOG_PID | LOG_CONS, LOG_USER);

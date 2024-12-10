@@ -73,6 +73,7 @@ cv::Mat latest_frame;
 struct addrinfo *res;  // will point to the results
 pthread_mutex_t frame_mutex;
 volatile unsigned caught_signal = 0;
+bool timeout_flag;
 
 /* The structure for the receiver thread*/
 typedef struct receive_params
@@ -102,6 +103,7 @@ void cleanup()
 static void signal_handler(int signal_number)
 {
     caught_signal = signal_number;
+    syslog(LOG_INFO, "Signal %d caught", signal_number);
 }
 
 /**
@@ -267,14 +269,18 @@ void *process_thread(void *arg)
 {
     syslog(LOG_DEBUG, "process_thread");
 
-    while (!caught_signal) 
+    while ((!caught_signal) && (timeout_flag == 0))
     {
         cv::Mat frame;
         static auto last_time = std::chrono::steady_clock::now();
         double average_fps = 0.0;
         int frame_count = 0;
         
-        pthread_mutex_lock(&frame_mutex);
+        if (pthread_mutex_lock(&frame_mutex) != 0)
+        {
+            syslog(LOG_ERR, "process_thread: Failed to lock mutex");
+            break;
+        }
         
         // Check if a new frame is available
         if (!latest_frame.empty()) 
@@ -332,8 +338,35 @@ void *receive_thread(void *receive_params_struct)
         int bytes_received;
         std::vector<unsigned char> jpeg_buffer(FRAME_SIZE);
 
-        // Receive the JPEG data
-        bytes_received = recvfrom(receive_params->sock_fd, jpeg_buffer.data(), jpeg_buffer.size(), 0, (struct sockaddr *)&(client_addr), &client_len);
+        struct timeval timeout;
+        fd_set readfds;
+        int retval;
+
+        timeout.tv_sec = 5;  // 5 seconds timeout
+        timeout.tv_usec = 0;
+
+        FD_ZERO(&readfds);
+        FD_SET(receive_params->sock_fd, &readfds);
+
+        retval = select(receive_params->sock_fd + 1, &readfds, NULL, NULL, &timeout);
+
+        if (retval == -1) 
+        {
+            syslog( LOG_ERR, "select() error occured");
+            pthread_exit(NULL);
+        } 
+        else if (retval == 0) 
+        {
+            timeout_flag = true;
+            syslog( LOG_ERR, "select() timeout occured on socket");
+            pthread_exit(NULL);
+        } 
+        else 
+        {
+            // Receive the JPEG data
+            bytes_received = recvfrom(receive_params->sock_fd, jpeg_buffer.data(), jpeg_buffer.size(), 0, (struct sockaddr *)&(client_addr), &client_len);
+        }
+
         if (bytes_received < 0)
         {
             syslog(LOG_ERR, "recvfrom() failed. Error: %s", strerror(errno));
@@ -363,7 +396,11 @@ void *receive_thread(void *receive_params_struct)
 
             syslog(LOG_INFO, "CAPTURE: Current FPS: %.2f, Average FPS: %.2f", fps, average_fps);
 
-            pthread_mutex_lock(&frame_mutex);
+            if (pthread_mutex_lock(&frame_mutex) != 0)
+            {
+                syslog(LOG_ERR, "receive_thread: Failed to lock mutex");
+                break;
+            }
             latest_frame = image.clone();
             pthread_mutex_unlock(&frame_mutex);
         }
@@ -469,8 +506,13 @@ int main()
         goto exit_on_fail;
     }
 
+    syslog(LOG_INFO, "Joining receive_params->thread_id...");
     pthread_join(receive_params->thread_id, NULL);
+    syslog(LOG_INFO, "receive_params->thread_id joined successfully.");
+
+    syslog(LOG_INFO, "Joining process_thread_id...");
     pthread_join(process_thread_id, NULL);
+    syslog(LOG_INFO, "process_thread_id joined successfully.");
 
 exit_on_fail:
     if (receive_params != NULL)

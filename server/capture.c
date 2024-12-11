@@ -732,10 +732,18 @@ int main(int argc, char **argv)
     int status;
     struct addrinfo hints;
     int optval = 1;
-    int flags;    
+    int flags;   
 
-    if(argc > 1)
-        dev_name = argv[1];
+    if (argc < 2)
+    {
+        fprintf(stderr, "Usage: %s <CLIENT_IP>\n", argv[0]);
+        exit(EXIT_FAILURE);
+    } 
+
+    const char *client_ip = argv[1];
+
+    if (argc > 2)
+        dev_name = argv[2];
     else
         dev_name = "/dev/video0";
 
@@ -824,7 +832,7 @@ int main(int argc, char **argv)
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port=htons(PORT_NUM);
 
-    inet_pton(res->ai_family, CLIENT_ADDRESS, &server_addr.sin_addr);
+    inet_pton(res->ai_family, client_ip, &server_addr.sin_addr);
 
     /* Setup signal handlers*/
     struct sigaction new_action;

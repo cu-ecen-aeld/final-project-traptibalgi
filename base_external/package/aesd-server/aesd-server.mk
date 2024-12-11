@@ -5,7 +5,7 @@
 #
 ##############################################################
 
-AESD_SERVER_VERSION = '0f34a717b5622ac836254e5103bbb7eb103fb7bb'
+AESD_SERVER_VERSION = '303c57a621f834ab0370fae6ed9321cf006b1e4d'
 # Note: Be sure to reference the *ssh* repository URL here (not https) to work properly
 # with ssh keys and the automated build/test system.
 # Your site should start with git@github.com:

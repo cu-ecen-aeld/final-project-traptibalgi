@@ -529,6 +529,10 @@ exit_on_fail:
         free(receive_params);
         receive_params = NULL;
     }
+    if (res != NULL) 
+    {
+        freeaddrinfo(res);
+    }
     cleanup();
     exit(EXIT_FAILURE);
 }

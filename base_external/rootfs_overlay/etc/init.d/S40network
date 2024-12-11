@@ -5,15 +5,19 @@
 
 # Debian ifupdown needs the /run/network lock directory
 mkdir -p /run/network
+
+# Load the wireless driver module
 modprobe brcmfmac
 
 case "$1" in
   start)
+    # Start all network interfaces configured in /etc/network/interfaces
 	printf "Starting network: "
 	/sbin/ifup -a
 	[ $? = 0 ] && echo "OK" || echo "FAIL"
 	;;
   stop)
+    # Stop all network interfaces configured in /etc/network/interfaces
 	printf "Stopping network: "
 	/sbin/ifdown -a
 	[ $? = 0 ] && echo "OK" || echo "FAIL"

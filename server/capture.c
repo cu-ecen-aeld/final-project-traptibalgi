@@ -348,8 +348,6 @@ static void mainloop(void)
                 perror("nanosleep");
             else
                 printf("time_error.tv_sec=%ld, time_error.tv_nsec=%ld\n", time_error.tv_sec, time_error.tv_nsec);
-
-            break;
         }
 
         /* EAGAIN - continue select loop unless count done. */

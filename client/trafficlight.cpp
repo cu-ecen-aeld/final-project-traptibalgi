@@ -59,7 +59,7 @@ using namespace std;
 #define GREEN_LED_PIN (0) // GPIO17
 #define RED_LED_PIN (1) // GPIO18
 #define YELLOW_LED_PIN (3) // GPIO22
-#define MOVING_AVERAGE_WINDOW (100)
+#define MOVING_AVERAGE_WINDOW (1000)
 
 /* Enumeration for traffic light colors. */
 enum TrafficLightColor {
@@ -403,7 +403,7 @@ void *receive_thread(void *receive_params_struct)
             average_fps = ((average_fps * frame_count) + fps) / (frame_count + 1);
             frame_count = std::min(frame_count + 1, MOVING_AVERAGE_WINDOW);
 
-            syslog(LOG_INFO, "CAPTURE: Current FPS: %.2f, Average FPS: %.2f", fps, average_fps);
+            syslog(LOG_INFO, "RECEIVE: Current FPS: %.2f, Average FPS: %.2f", fps, average_fps);
 
             if (pthread_mutex_lock(&frame_mutex) != 0)
             {

@@ -202,27 +202,27 @@ static void process_image(const void *p, int size)
         yuv2rgb(y1, u, v, &rgb[j+3], &rgb[j+4], &rgb[j+5]);
     }
 
-    // Initialize JPEG compression
+    /* Initialize JPEG compression */
     cinfo.err = jpeg_std_error(&jerr);
     jpeg_create_compress(&cinfo);
 
-    // Set up memory destination
+    /* Set up memory destination */
     jpeg_mem_dest(&cinfo, &jpeg_buffer, &jpeg_size);
 
-    // Set image parameters
+    /* Set image parameters */
     cinfo.image_width = HRES;
     cinfo.image_height = VRES;
     cinfo.input_components = 3;
     cinfo.in_color_space = JCS_RGB;
 
-    // Set default compression parameters
+    /* Set default compression parameters */
     jpeg_set_defaults(&cinfo);
     jpeg_set_quality(&cinfo, 75, TRUE); // Quality range: 0-100
 
-    // Start compression
+    /* Start compression */
     jpeg_start_compress(&cinfo, TRUE);
 
-    // Write scanlines
+    /* Write scanlines */
     while (cinfo.next_scanline < cinfo.image_height) 
     {
         unsigned char *row_pointer[1];
@@ -230,7 +230,7 @@ static void process_image(const void *p, int size)
         jpeg_write_scanlines(&cinfo, row_pointer, 1);
     }
 
-    // Finish compression
+    /* Finish compression */
     jpeg_finish_compress(&cinfo);
     jpeg_destroy_compress(&cinfo);
 
@@ -244,9 +244,8 @@ static void process_image(const void *p, int size)
     }
 
     syslog(LOG_DEBUG, "JPEG frame sent: %lu bytes\n", jpeg_size);
-    printf("JPEG frame sent: %lu bytes\n", jpeg_size);
 
-    // Free the JPEG buffer
+    /* Free the JPEG buffer */
     if (jpeg_buffer) 
     {
         free(jpeg_buffer);
@@ -269,6 +268,7 @@ static int read_frame(void)
     buf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     buf.memory = V4L2_MEMORY_MMAP;
 
+    /* Dequeue a buffer */
     if (-1 == xioctl(fd, VIDIOC_DQBUF, &buf))
     {
         switch (errno)
@@ -282,7 +282,6 @@ static int read_frame(void)
                     */
                 return 0;
 
-
             default:
                 printf("mmap failure\n");
                 errno_exit("VIDIOC_DQBUF");
@@ -293,10 +292,10 @@ static int read_frame(void)
 
     process_image(buffers[buf.index].start, buf.bytesused);
 
+    /* Enqueue the buffer again */
     if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
             errno_exit("VIDIOC_QBUF");
 
-    //printf("R");
     return 1;
 }
 
@@ -306,7 +305,6 @@ static int read_frame(void)
 static void mainloop(void)
 {
     syslog(LOG_DEBUG, "in mainloop");
-    unsigned int count;
     struct timespec read_delay;
     struct timespec time_error;
 
@@ -315,48 +313,46 @@ static void mainloop(void)
 
     while (!caught_signal)
     {
-        for (;;)
+        fd_set fds;
+        struct timeval tv;
+        int r;
+
+        /* Add the file descriptors to be watched */
+        FD_ZERO(&fds);
+        FD_SET(fd, &fds);
+
+        /* Timeout. */
+        tv.tv_sec = 2;
+        tv.tv_usec = 0;
+
+        /* Monitor for ready-to-read */
+        r = select(fd + 1, &fds, NULL, NULL, &tv);
+
+        if (-1 == r)
         {
-            fd_set fds;
-            struct timeval tv;
-            int r;
-
-            FD_ZERO(&fds);
-            FD_SET(fd, &fds);
-
-            /* Timeout. */
-            tv.tv_sec = 2;
-            tv.tv_usec = 0;
-
-            r = select(fd + 1, &fds, NULL, NULL, &tv);
-
-            if (-1 == r)
-            {
-                if (EINTR == errno)
-                    continue;
-                errno_exit("select");
-            }
-
-            if (0 == r)
-            {
-                fprintf(stderr, "select timeout\n");
-                exit(EXIT_FAILURE);
-            }
-
-            if (read_frame())
-            {
-                if(nanosleep(&read_delay, &time_error) != 0)
-                    perror("nanosleep");
-                else
-                    printf("time_error.tv_sec=%ld, time_error.tv_nsec=%ld\n", time_error.tv_sec, time_error.tv_nsec);
-
-                count--;
-                break;
-            }
-
-            /* EAGAIN - continue select loop unless count done. */
+            if (EINTR == errno)
+                continue;
+            errno_exit("select");
         }
 
+        if (0 == r)
+        {
+            fprintf(stderr, "select timeout\n");
+            exit(EXIT_FAILURE);
+        }
+
+        /* Read frame from buffer */
+        if (read_frame())
+        {
+            if(nanosleep(&read_delay, &time_error) != 0)
+                perror("nanosleep");
+            else
+                printf("time_error.tv_sec=%ld, time_error.tv_nsec=%ld\n", time_error.tv_sec, time_error.tv_nsec);
+
+            break;
+        }
+
+        /* EAGAIN - continue select loop unless count done. */
     }
 }
 
@@ -399,9 +395,12 @@ static void start_capturing(void)
                 buf.memory = V4L2_MEMORY_MMAP;
                 buf.index = i;
 
+                /* Queue the buffers */
                 if (-1 == xioctl(fd, VIDIOC_QBUF, &buf))
                         errno_exit("VIDIOC_QBUF");
         }
+
+        /* Starting the capture stream */
         type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         if (-1 == xioctl(fd, VIDIOC_STREAMON, &type))
                 errno_exit("VIDIOC_STREAMON");
@@ -459,6 +458,7 @@ static void init_mmap(void)
         req.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
         req.memory = V4L2_MEMORY_MMAP;
 
+        /* Request for 6 buffers */
         if (-1 == xioctl(fd, VIDIOC_REQBUFS, &req)) 
         {
                 if (EINVAL == errno) 
@@ -472,12 +472,14 @@ static void init_mmap(void)
                 }
         }
 
+        /* Need minimum of 2 - current frame and the next one */
         if (req.count < 2) 
         {
                 fprintf(stderr, "Insufficient buffer memory on %s\n", dev_name);
                 exit(EXIT_FAILURE);
         }
 
+        /* Allocate memory for buffers */
         buffers = (struct buffer*)calloc(req.count, sizeof(*buffers));
 
         if (!buffers) 
@@ -486,6 +488,7 @@ static void init_mmap(void)
                 exit(EXIT_FAILURE);
         }
 
+        /* Map video capture buffers from kernel space into user space */
         for (n_buffers = 0; n_buffers < req.count; ++n_buffers) {
                 struct v4l2_buffer buf;
 
@@ -521,6 +524,7 @@ static void init_device(void)
     struct v4l2_crop crop;
     unsigned int min;
 
+    /* Checks if the device is a valid V4L2 device by querying its capabilities */
     if (-1 == xioctl(fd, VIDIOC_QUERYCAP, &cap))
     {
         if (EINVAL == errno) {
@@ -534,6 +538,7 @@ static void init_device(void)
         }
     }
 
+    /* Checks if the device supports video capture */
     if (!(cap.capabilities & V4L2_CAP_VIDEO_CAPTURE))
     {
         fprintf(stderr, "%s is no video capture device\n",
@@ -541,6 +546,7 @@ static void init_device(void)
         exit(EXIT_FAILURE);
     }
 
+    /* Checks if the device supports streaming I/O */
     if (!(cap.capabilities & V4L2_CAP_STREAMING))
     {
         fprintf(stderr, "%s does not support streaming i/o\n",
@@ -552,6 +558,7 @@ static void init_device(void)
 
     CLEAR(cropcap);
 
+    /* Checks if the device has cropping capabilties */
     cropcap.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
     if (0 == xioctl(fd, VIDIOC_CROPCAP, &cropcap))
@@ -580,6 +587,7 @@ static void init_device(void)
 
     CLEAR(fmt);
 
+    /* Sets or gets the video format */
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
     if (force_format)
@@ -650,17 +658,20 @@ static void open_device(void)
 {
         struct stat st;
 
+        /* Retrieve information about device */
         if (-1 == stat(dev_name, &st)) {
                 fprintf(stderr, "Cannot identify '%s': %d, %s\n",
                          dev_name, errno, strerror(errno));
                 exit(EXIT_FAILURE);
         }
 
+        /* Check if a character device */
         if (!S_ISCHR(st.st_mode)) {
                 fprintf(stderr, "%s is no device\n", dev_name);
                 exit(EXIT_FAILURE);
         }
 
+        /* Open device in non-blocking mode */
         fd = open(dev_name, O_RDWR /* required */ | O_NONBLOCK, 0);
 
         if (-1 == fd) {
@@ -802,7 +813,7 @@ int main(int argc, char **argv)
 
     memset(&hints, 0, sizeof hints);    // Make sure the struct is empty
     hints.ai_family = AF_INET;          // IPv4
-    hints.ai_socktype = SOCK_DGRAM;    // TCP stream sockets
+    hints.ai_socktype = SOCK_DGRAM;    // UDP stream sockets
     hints.ai_flags = AI_PASSIVE;        // Fill in my IP for me
 
     if ((status = getaddrinfo(NULL, "9000", &hints, &res)) != 0) 
@@ -849,11 +860,7 @@ int main(int argc, char **argv)
         syslog(LOG_ERR, "Sigaction for SIGINT failed");
     }
 
-    /* Now accept incoming connections in a loop while signal not caught*/
-    while (!caught_signal)
-    {
-        mainloop();
-    }
+    mainloop();
 
 exit_on_fail:
     cleanup();

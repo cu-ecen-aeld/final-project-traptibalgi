@@ -150,6 +150,7 @@ void controlLED(TrafficLightColor color)
 /**
  * @brief Detects traffic light color from a given frame.
  * @param img Input frame for traffic light detection.
+ * Adapted from: https://github.com/HevLfreis/TrafficLight-Detector
  */
 void detect(cv::Mat& img) 
 {
@@ -157,34 +158,37 @@ void detect(cv::Mat& img)
     cv::Mat hsv, mask1, mask2, maskg, masky;
     int font = cv::FONT_HERSHEY_SIMPLEX;
 
-    // Convert image to HSV color space
+    /* Convert image to HSV color space */
     cv::cvtColor(img, hsv, cv::COLOR_BGR2HSV);
 
-    // Define color ranges
+    /* Define color ranges */
     cv::Scalar lower_red1(0, 100, 100), upper_red1(10, 255, 255);
     cv::Scalar lower_red2(160, 100, 100), upper_red2(180, 255, 255);
     cv::Scalar lower_green(40, 50, 50), upper_green(90, 255, 255);
     cv::Scalar lower_yellow(15, 150, 150), upper_yellow(35, 255, 255);
 
+    /* Create masks */
     cv::inRange(hsv, lower_red1, upper_red1,mask1);
     cv::inRange(hsv, lower_red2, upper_red2,mask2);
     cv::inRange(hsv, lower_green, upper_green,maskg);
     cv::inRange(hsv, lower_yellow, upper_yellow,masky);
     cv::Mat maskr = mask1 + mask2;
 
+    /* 5 pixel radius, bound is 0.7 the height*/
     int r = 5;
     double bound = 7.0 / 10.0;
     cv::Size size = img.size();
 
-    // Hough Circle Detection
+    /* Hough Circle Detection */
+    /*  i[0]: The x-coordinate of the circle's center.
+        i[1]: The y-coordinate of the circle's center.
+        i[2]: The radius of the circle. */
     std::vector<cv::Vec3f> r_circles, g_circles, y_circles;
     cv::HoughCircles(maskr, r_circles, cv::HOUGH_GRADIENT, 1, 80, 50, 10, 0, 30);
     cv::HoughCircles(maskg, g_circles, cv::HOUGH_GRADIENT, 1, 60, 50, 10, 0, 30);
     cv::HoughCircles(masky, y_circles, cv::HOUGH_GRADIENT, 1, 30, 50, 5, 0, 30);
-    
-    int detected = 0;
 
-    // Red circle detection
+    /* Red circle detection */
     for (const auto& i : r_circles) 
     {
         if (i[0] > size.width || i[1] > size.height || i[1] > size.height * bound)
@@ -209,7 +213,7 @@ void detect(cv::Mat& img)
         }      
     }
 
-    // Green circle detection
+    /* Green circle detection */
     for (const auto& i : g_circles) 
     {
         if (i[0] > size.width || i[1] > size.height || i[1] > size.height * bound)
@@ -234,7 +238,7 @@ void detect(cv::Mat& img)
         }
     }
 
-    // Yellow circle detection
+    /* Yellow circle detection */
     for (const auto& i : y_circles) 
     {
         if (i[0] > size.width || i[1] > size.height || i[1] > size.height * bound)
@@ -285,14 +289,14 @@ void *process_thread(void *arg)
             break;
         }
         
-        // Check if a new frame is available
+        /* Check if a new frame is available */
         if (!latest_frame.empty()) 
         {
             frame = latest_frame.clone();
             pthread_mutex_unlock(&frame_mutex);
             detect(frame);
 
-            // Calculate and log FPS
+            /* Calculate and log FPS */
             auto current_time = std::chrono::steady_clock::now();
             std::chrono::duration<double> elapsed = current_time - last_time;
             double fps = 1.0 / elapsed.count();
@@ -366,7 +370,7 @@ void *receive_thread(void *receive_params_struct)
         } 
         else 
         {
-            // Receive the JPEG data
+            /* Receive the JPEG data */
             bytes_received = recvfrom(receive_params->sock_fd, jpeg_buffer.data(), jpeg_buffer.size(), 0, (struct sockaddr *)&(client_addr), &client_len);
         }
 
@@ -378,9 +382,11 @@ void *receive_thread(void *receive_params_struct)
         else if (bytes_received > 0)
         {
             syslog(LOG_DEBUG, "Received %d bytes", bytes_received);
-            jpeg_buffer.resize(bytes_received);  // Resize to the actual received size
 
-            // Decode the JPEG data
+            /* Resize to the actual received size */
+            jpeg_buffer.resize(bytes_received);  
+
+            /* Decode the JPEG data */
             cv::Mat image = cv::imdecode(jpeg_buffer, cv::IMREAD_COLOR);
             if (image.empty()) 
             {
@@ -388,7 +394,7 @@ void *receive_thread(void *receive_params_struct)
                 continue;
             }
             
-            // Calculate and log FPS
+            /* Calculate and log FPS */
             auto current_time = std::chrono::steady_clock::now();
             std::chrono::duration<double> elapsed = current_time - last_time;
             double fps = 1.0 / elapsed.count();
@@ -442,7 +448,7 @@ int main()
         syslog(LOG_ERR, "Sigaction for SIGINT failed");
     }
 
-    /* Create a mutex for synchronising writes to tmp_file*/
+    /* Create a mutex for synchronising access to the frame*/
     if(pthread_mutex_init(&frame_mutex, NULL) != 0)
     {
         syslog(LOG_ERR, "Creating mutex failed");

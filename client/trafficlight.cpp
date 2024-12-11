@@ -93,6 +93,9 @@ void cleanup()
         shutdown(client_fd, SHUT_RDWR);
         close(client_fd);
     }
+    digitalWrite(YELLOW_LED_PIN, LOW);
+    digitalWrite(GREEN_LED_PIN, LOW);
+    digitalWrite(RED_LED_PIN, LOW);
     closelog();
 }
 
